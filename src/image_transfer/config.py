@@ -17,7 +17,7 @@ class Config:
         "watch_path": "~/data/images",
         "remote_host": "localhost",
         "remote_user": "user",
-        "remote_base_path": "~/data/images",
+        "remote_base_path": "/data/images",
         "transfer_method": "auto",
         "file_patterns": ["*.fits"],
         "compression": False,  # No compression for FITS
@@ -28,9 +28,59 @@ class Config:
 
     def __init__(self, config_path: Optional[Path] = None):
         """Initialize configuration."""
+        if config_path:
+            config_path = self._resolve_config_path(config_path)
+
         self.config_path = config_path or self._default_config_path()
         self.data = self._load_config()
         self._validate_config()
+
+    def _resolve_config_path(self, config_path) -> Optional[Path]:
+        """Resolve config path, checking multiple locations."""
+        # Convert string to Path if needed
+        if isinstance(config_path, str):
+            config_path = Path(config_path)
+
+        # If absolute path and exists, use it
+        if config_path.is_absolute() and config_path.exists():
+            return config_path
+
+        # List of locations to check for the config file
+        search_locations = []
+
+        # 1. Check as-is (relative to current directory)
+        search_locations.append(Path.cwd() / config_path)
+
+        # 2. Check in project's config folder (when running from repo)
+        # Find project root by looking for pyproject.toml
+        current = Path.cwd()
+        while current != current.parent:
+            if (current / "pyproject.toml").exists():
+                search_locations.append(current / "config" / config_path.name)
+                break
+            current = current.parent
+
+        # 3. Check in config subfolder relative to current directory
+        search_locations.append(Path.cwd() / "config" / config_path.name)
+
+        # 4. Check in user's config directory
+        user_config_dir = Path.home() / ".config" / "image-transfer"
+        search_locations.append(user_config_dir / config_path.name)
+
+        # Try each location
+        for location in search_locations:
+            if location.exists():
+                logger.info(f"Found config file at: {location}")
+                return location
+
+        # Config not found
+        tried_locations = "\n  - ".join(str(loc) for loc in search_locations)
+        logger.warning(
+            f"Config file '{config_path}' not found in any of these locations:"
+        )
+        logger.warning(f"  - {tried_locations}")
+        logger.info("Using default configuration instead")
+        return None
 
     @classmethod
     def _default_config_path(cls) -> Path:
@@ -46,7 +96,7 @@ class Config:
 
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML or JSON file."""
-        if self.config_path.exists():
+        if self.config_path and self.config_path.exists():
             logger.info(f"Loading configuration from {self.config_path}")
 
             with open(self.config_path, "r") as f:
@@ -56,7 +106,17 @@ class Config:
                     config = json.load(f)
 
             # Merge with defaults
-            return {**self.DEFAULT_CONFIG, **config}
+            merged_config = {**self.DEFAULT_CONFIG, **config}
+
+            # Log which settings are being used
+            logger.debug("Configuration settings:")
+            for key, value in merged_config.items():
+                if key in config:
+                    logger.debug(f"  {key}: {value} (from config file)")
+                else:
+                    logger.debug(f"  {key}: {value} (default)")
+
+            return merged_config
         else:
             logger.info("Using default configuration")
             return self.DEFAULT_CONFIG.copy()
@@ -64,35 +124,56 @@ class Config:
     def _validate_config(self):
         """Validate configuration values."""
         # Expand paths
-        self.data["watch_path"] = str(Path(self.data["watch_path"]).expanduser())
-        if self.data["remote_host"] in ["localhost", "127.0.0.1"]:
+        self.data["watch_path"] = str(
+            Path(self.data["watch_path"]).expanduser().resolve()
+        )
+
+        # For local transfers, expand the remote path too
+        if self.data["remote_host"] in ["localhost", "127.0.0.1", "::1"]:
             self.data["remote_base_path"] = str(
-                Path(self.data["remote_base_path"]).expanduser()
+                Path(self.data["remote_base_path"]).expanduser().resolve()
             )
+
+        # Validate transfer method
+        valid_methods = ["auto", "scp", "rsync", "local"]
+        if self.data.get("transfer_method") not in valid_methods:
+            logger.warning(
+                f"Invalid transfer_method '{self.data.get('transfer_method')}', using 'auto'"
+            )
+            self.data["transfer_method"] = "auto"
+
+        # Log final configuration
+        logger.info(f"Watching: {self.data['watch_path']}")
+        logger.info(
+            f"Destination: {self.data['remote_host']}:{self.data['remote_base_path']}"
+        )
+        logger.info(f"Transfer method: {self.data['transfer_method']}")
 
     @classmethod
     def create_default_config(
         cls, path: Optional[Path] = None, format: str = "yaml"
     ) -> Path:
         """Create default configuration file."""
-        config_path = path or cls._default_config_path()
+        if not path:
+            config_dir = Path.home() / ".config" / "image-transfer"
+            path = config_dir / f"config.{format}"
 
-        # Use specified format
-        if format == "yaml" and config_path.suffix not in [".yaml", ".yml"]:
-            config_path = config_path.with_suffix(".yaml")
-
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         if format == "yaml":
-            with open(config_path, "w") as f:
+            with open(path, "w") as f:
+                # Add helpful comments to the YAML
+                f.write("# Image Transfer Daemon Configuration\n")
+                f.write("# Edit this file to match your setup\n\n")
                 yaml.dump(
                     cls.DEFAULT_CONFIG, f, default_flow_style=False, sort_keys=False
                 )
         else:
-            with open(config_path, "w") as f:
+            with open(path, "w") as f:
                 json.dump(cls.DEFAULT_CONFIG, f, indent=2)
 
-        return config_path
+        logger.info(f"Created default configuration at: {path}")
+        return path
 
     def save(self, path: Optional[Path] = None):
         """Save current configuration to file."""
@@ -104,6 +185,8 @@ class Config:
             else:
                 json.dump(self.data, f, indent=2)
 
+        logger.info(f"Saved configuration to: {save_path}")
+
     def __getitem__(self, key: str) -> Any:
         """Get configuration value."""
         return self.data[key]
@@ -111,3 +194,7 @@ class Config:
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value with default."""
         return self.data.get(key, default)
+
+    def __repr__(self) -> str:
+        """String representation of config."""
+        return f"Config(path={self.config_path}, transfer_method={self.data.get('transfer_method')})"
