@@ -17,7 +17,7 @@ class Config:
         "watch_path": "~/data/images",
         "remote_host": "localhost",
         "remote_user": "user",
-        "remote_base_path": "/data/images",
+        "remote_base_path": "~/data/images",
         "transfer_method": "auto",
         "file_patterns": ["*.fits"],
         "compression": False,  # No compression for FITS
