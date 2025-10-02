@@ -53,4 +53,6 @@ class ImageTransferDaemon:
 
     def stop(self):
         """Stop the daemon."""
-        self.observer.stop()
+        if self.observer and self.observer.is_alive():
+            self.observer.stop()
+            logger.info("Daemon stopped")

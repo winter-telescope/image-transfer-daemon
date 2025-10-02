@@ -12,6 +12,31 @@ Cross-platform watchdog daemon which watches a specific folder and transfers dat
 - Automatic retry on failure
 - Service/daemon installation for all platforms
 
+## Quick Start
+
+```bash
+# Install
+pip install .
+
+# Windows only: install with service support
+pip install ".[windows]"
+
+# Create config
+image-transfer --create-config
+
+# Edit config
+# Windows: notepad %USERPROFILE%\.config\image-transfer\config.yaml
+# Linux/Mac: nano ~/.config/image-transfer/config.yaml
+
+# Test run
+image-transfer -v
+
+# Install as service
+# Windows (as admin): image-transfer-service --install
+# Linux: sudo image-transfer-service --install
+# macOS: image-transfer-service --install
+```
+
 ## Installation
 
 ### Install from source (development)
@@ -51,6 +76,8 @@ conda activate .\.conda
 
 # Install with development and Windows service dependencies
 pip install -e ".[dev,windows]"
+
+# Note: The [windows] extra installs pywin32 which is required for Windows service
 ```
 
 #### Linux/macOS development setup
@@ -122,13 +149,13 @@ image-transfer -v
 
 ```powershell
 # Run PowerShell as Administrator
-cd path\to\image-transfer-daemon
 
-# Install the service
-python scripts\install-service.py
-
-# Or if installed via pip
+# If installed via pip
 image-transfer-service --install
+
+# Or from the repository directory
+cd path\to\image-transfer-daemon
+python scripts\install-service.py --install
 
 # Install with auto-start on boot
 image-transfer-service --install --startup auto
@@ -432,7 +459,14 @@ ssh user@remote-host "echo 'Connection successful'"
    - Linux: `sudo journalctl -u image-transfer.service`
    - macOS: Console.app
 
-4. **Files not transferring**: Verify file patterns in config match your files
+4. **Windows service installation fails**: Ensure pywin32 is installed
+   ```powershell
+   pip install pywin32
+   # Or reinstall with Windows support
+   pip install ".[windows]"
+   ```
+
+5. **Files not transferring**: Verify file patterns in config match your files
    ```yaml
    file_patterns:
      - "*.fits"
@@ -440,7 +474,7 @@ ssh user@remote-host "echo 'Connection successful'"
      - "*.fit"
    ```
 
-5. **Network timeouts**: Increase timeout in configuration
+6. **Network timeouts**: Increase timeout in configuration
    ```yaml
    transfer_timeout_seconds: 300
    ```

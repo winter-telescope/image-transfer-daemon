@@ -45,9 +45,10 @@ windows = [
 "Homepage" = "https://github.com/yourusername/image-transfer-daemon"
 "Bug Tracker" = "https://github.com/yourusername/image-transfer-daemon/issues"
 
+
 [project.scripts]
 image-transfer = "image_transfer.__main__:main"
-image-transfer-service = "image_transfer.services:install_service"
+image-transfer-service = "image_transfer.services:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
