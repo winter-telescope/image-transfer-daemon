@@ -9,6 +9,9 @@ remote_host: freya
 remote_user: winter
 remote_base_path: ~/data/images
 
+# Camera-specific settings
+camera_name: spring  # Subfolder name for this camera's data
+
 # Transfer settings
 transfer_method: auto  # Options: auto, scp, rsync, local
 

@@ -30,6 +30,9 @@ class BaseTransferHandler(ABC):
         else:
             self.remote_base_path = remote_path
 
+        # Camera name for subdirectory (optional)
+        self.camera_name = config.get("camera_name", None)
+
         self.transfer_method = config.get("transfer_method", "auto")
         self.verify_transfer = config.get("verify_transfer", True)
         self.setup_platform_specifics()
@@ -49,6 +52,8 @@ class BaseTransferHandler(ABC):
             dest_path = Path(self.remote_base_path).expanduser()
             dest_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Local transfer mode - destination: {dest_path}")
+            if self.camera_name:
+                logger.info(f"Camera subfolder: {self.camera_name}")
             return True
 
         try:
@@ -74,6 +79,9 @@ class BaseTransferHandler(ABC):
                         "~", remote_home
                     )
                     logger.info(f"Expanded remote path to: {self.remote_base_path}")
+
+                if self.camera_name:
+                    logger.info(f"Camera subfolder: {self.camera_name}")
 
                 # Now create the base directory
                 mkdir_cmd = [
@@ -108,6 +116,30 @@ class BaseTransferHandler(ABC):
             logger.error(f"Failed to test connection: {e}")
             return False
 
+    def _build_remote_path(self, relative_path: Path) -> str:
+        """Build the remote path, inserting camera name if configured."""
+        # Convert to POSIX path
+        relative_posix = relative_path.as_posix()
+
+        if self.camera_name:
+            # Insert camera name into the path
+            # For a file like 20251002/image.fits, we want 20251002/spring/image.fits
+            path_parts = relative_posix.split("/")
+
+            if len(path_parts) > 1:
+                # Has subdirectory (like YYYYMMDD)
+                # Insert camera name after the date directory
+                date_dir = path_parts[0]
+                remaining = "/".join(path_parts[1:])
+                remote_relative = f"{date_dir}/{self.camera_name}/{remaining}"
+            else:
+                # No subdirectory, just add camera name
+                remote_relative = f"{self.camera_name}/{relative_posix}"
+        else:
+            remote_relative = relative_posix
+
+        return f"{self.remote_base_path}/{remote_relative}"
+
     def transfer_file(self, local_path: str) -> bool:
         """Transfer a file to the remote location."""
         try:
@@ -131,7 +163,28 @@ class BaseTransferHandler(ABC):
     def transfer_local(self, local_path: Path, relative_path: Path) -> bool:
         """Transfer file locally."""
         try:
-            dest_path = Path(self.remote_base_path).expanduser() / relative_path
+            # Build destination path with camera subfolder if configured
+            if self.camera_name:
+                # Insert camera name into the path
+                path_parts = relative_path.parts
+                if len(path_parts) > 1:
+                    # Has subdirectory (like YYYYMMDD)
+                    dest_path = (
+                        Path(self.remote_base_path).expanduser()
+                        / path_parts[0]
+                        / self.camera_name
+                        / Path(*path_parts[1:])
+                    )
+                else:
+                    # No subdirectory
+                    dest_path = (
+                        Path(self.remote_base_path).expanduser()
+                        / self.camera_name
+                        / relative_path
+                    )
+            else:
+                dest_path = Path(self.remote_base_path).expanduser() / relative_path
+
             dest_path.parent.mkdir(parents=True, exist_ok=True)
 
             shutil.copy2(str(local_path), str(dest_path))
@@ -142,7 +195,9 @@ class BaseTransferHandler(ABC):
                 if source_size != dest_size:
                     raise ValueError(f"Size mismatch: {source_size} != {dest_size}")
 
-            logger.info(f"Successfully transferred {relative_path} (local)")
+            logger.info(
+                f"Successfully transferred {relative_path} → {dest_path.relative_to(Path(self.remote_base_path).expanduser())}"
+            )
             return True
 
         except Exception as e:
@@ -152,9 +207,8 @@ class BaseTransferHandler(ABC):
     def transfer_remote(self, local_path: Path, relative_path: Path) -> bool:
         """Transfer file to remote host."""
         try:
-            # Convert path for remote system (use absolute path, not ~)
-            remote_relative = relative_path.as_posix()
-            remote_path = f"{self.remote_base_path}/{remote_relative}"
+            # Build remote path with camera subfolder
+            remote_path = self._build_remote_path(relative_path)
             remote_dir = str(Path(remote_path).parent.as_posix())
 
             # Create remote directory (without quotes around path)
@@ -191,9 +245,7 @@ class BaseTransferHandler(ABC):
                     )
 
             # Transfer file using scp
-            logger.info(
-                f"Transferring {relative_path} to {self.remote_host}:{remote_path}"
-            )
+            logger.info(f"Transferring {relative_path} → {remote_path}")
             scp_cmd = [
                 "scp",
                 "-q",
@@ -233,7 +285,7 @@ class BaseTransferHandler(ABC):
                     else:
                         logger.debug(f"Transfer verified: {local_size} bytes")
 
-            logger.info(f"Successfully transferred {relative_path}")
+            logger.info(f"Successfully transferred to {self.remote_host}:{remote_path}")
             return True
 
         except subprocess.TimeoutExpired:
