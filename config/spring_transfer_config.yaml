@@ -1,0 +1,25 @@
+# Image Transfer Daemon Configuration
+# Transfer from Windows camera computer to Linux processing server
+
+# Local directory to watch for new images
+watch_path: ~/data/images
+
+# Remote server details
+remote_host: freya
+remote_user: winter
+remote_base_path: ~/data/images
+
+# Transfer settings
+transfer_method: auto  # Options: auto, scp, rsync, local
+
+# File patterns to match (case-insensitive on Windows)
+file_patterns:
+  - "*.fits"
+  - "*.fit"
+  - "*.FIT"
+  - "*.FITS"
+
+# Reliability settings
+verify_transfer: true
+retry_attempts: 3
+retry_delay: 5  # seconds
