@@ -3,6 +3,7 @@
 import logging
 import shutil
 import subprocess
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -206,17 +207,35 @@ class BaseTransferHandler(ABC):
 
     def transfer_remote(self, local_path: Path, relative_path: Path) -> bool:
         """Transfer file to remote host."""
+        import time
+
         try:
             # Build remote path with camera subfolder
             remote_path = self._build_remote_path(relative_path)
             remote_dir = str(Path(remote_path).parent.as_posix())
 
-            # Create directory AND transfer file using a single SSH session with tar
             logger.info(f"Transferring {relative_path} → {remote_path}")
 
-            # First approach: Use SCP with automatic directory creation via rsync
-            # (if rsync is available on both systems)
-            if self.transfer_method == "auto" or self.transfer_method == "rsync":
+            # Check if rsync is available (won't be on Windows usually)
+            use_rsync = False
+            if self.transfer_method in ["auto", "rsync"]:
+                try:
+                    # Check if rsync exists
+                    check_rsync = subprocess.run(
+                        ["where" if sys.platform == "win32" else "which", "rsync"],
+                        capture_output=True,
+                        timeout=2,
+                    )
+                    use_rsync = check_rsync.returncode == 0
+                    if not use_rsync and self.transfer_method == "rsync":
+                        logger.warning(
+                            "rsync requested but not available, falling back to scp"
+                        )
+                except:
+                    use_rsync = False
+
+            # Try rsync if available
+            if use_rsync:
                 rsync_cmd = [
                     "rsync",
                     "-avz",
@@ -234,46 +253,52 @@ class BaseTransferHandler(ABC):
                     )
                     return True
                 # If rsync fails, fall back to scp
+                logger.debug("rsync failed, falling back to scp")
 
-            # Second approach: Create directory via SSH then wait then SCP
-            # First, use a compound SSH command to create dir and confirm
+            # Use SCP (default for Windows)
+            # First, create directory via SSH
             setup_cmd = [
                 "ssh",
                 "-o",
                 "ConnectTimeout=10",
                 f"{self.remote_user}@{self.remote_host}",
-                f"mkdir -p {remote_dir} && echo 'DIR_READY'",
+                f"mkdir -p {remote_dir}",
             ]
 
+            logger.debug(f"Creating remote directory: {remote_dir}")
             result = subprocess.run(
                 setup_cmd, capture_output=True, text=True, timeout=30
             )
 
-            if result.returncode == 0 and "DIR_READY" in result.stdout:
-                # Now transfer the file
-                scp_cmd = [
-                    "scp",
-                    "-o",
-                    "ConnectTimeout=60",
-                    str(local_path).replace("\\", "/"),  # Handle Windows paths
-                    f"{self.remote_user}@{self.remote_host}:{remote_path}",
-                ]
+            if result.returncode != 0:
+                logger.warning(f"Failed to create remote directory: {result.stderr}")
 
-                result = subprocess.run(
-                    scp_cmd, capture_output=True, text=True, timeout=300
-                )
+            # Small delay to ensure SSH connection is closed
+            time.sleep(0.5)
 
-                if result.returncode != 0:
-                    logger.error(f"SCP failed: {result.stderr}")
-                    return False
+            # Now transfer the file
+            # Convert Windows path to forward slashes
+            local_path_str = str(local_path).replace("\\", "/")
 
-                logger.info(
-                    f"Successfully transferred to {self.remote_host}:{remote_path}"
-                )
-                return True
-            else:
-                logger.error(f"Failed to setup remote directory: {result.stderr}")
+            scp_cmd = [
+                "scp",
+                "-o",
+                "ConnectTimeout=60",
+                local_path_str,
+                f"{self.remote_user}@{self.remote_host}:{remote_path}",
+            ]
+
+            logger.debug(f"Running SCP: {' '.join(scp_cmd)}")
+            result = subprocess.run(
+                scp_cmd, capture_output=True, text=True, timeout=300
+            )
+
+            if result.returncode != 0:
+                logger.error(f"SCP failed: {result.stderr}")
                 return False
+
+            logger.info(f"Successfully transferred to {self.remote_host}:{remote_path}")
+            return True
 
         except subprocess.TimeoutExpired:
             logger.error(f"Transfer timed out for {local_path}")
