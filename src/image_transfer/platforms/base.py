@@ -211,11 +211,11 @@ class BaseTransferHandler(ABC):
             remote_path = self._build_remote_path(relative_path)
             remote_dir = str(Path(remote_path).parent.as_posix())
 
-            # Create remote directory (without quotes around path)
+            # Create remote directory
             mkdir_cmd = [
                 "ssh",
                 "-o",
-                "ConnectTimeout=30",
+                "ConnectTimeout=10",
                 f"{self.remote_user}@{self.remote_host}",
                 f"mkdir -p {remote_dir}",
             ]
@@ -226,71 +226,42 @@ class BaseTransferHandler(ABC):
             )
             if result.returncode != 0:
                 logger.warning(f"Failed to create remote directory: {result.stderr}")
-                # Try alternative method using shell expansion
-                mkdir_cmd = [
-                    "ssh",
-                    "-o",
-                    "ConnectTimeout=30",
-                    f"{self.remote_user}@{self.remote_host}",
-                    "sh",
-                    "-c",
-                    f"'mkdir -p {remote_dir}'",
-                ]
-                result = subprocess.run(
-                    mkdir_cmd, capture_output=True, text=True, timeout=30
-                )
-                if result.returncode != 0:
-                    logger.error(
-                        f"Second attempt to create directory failed: {result.stderr}"
-                    )
+
+            # Convert Windows path to string with forward slashes for SCP
+            local_path_str = str(local_path).replace("\\", "/")
 
             # Transfer file using scp
-            logger.info(f"Transferring {relative_path} → {remote_path}")
+            logger.info(f"Transferring {local_path_str} → {remote_path}")
+
+            # On Windows, we might need to handle the path differently
             scp_cmd = [
                 "scp",
-                "-q",
                 "-o",
                 "ConnectTimeout=30",
-                str(local_path),
+                local_path_str,  # Use forward slashes
                 f"{self.remote_user}@{self.remote_host}:{remote_path}",
             ]
 
+            logger.debug(f"SCP command: {' '.join(scp_cmd)}")
+
+            # Use shell=True on Windows to handle paths better
+            import platform
+
+            use_shell = platform.system() == "Windows"
+
             result = subprocess.run(
-                scp_cmd, capture_output=True, text=True, timeout=300
+                scp_cmd, capture_output=True, text=True, timeout=300, shell=use_shell
             )
 
             if result.returncode != 0:
-                raise Exception(f"SCP failed: {result.stderr}")
-
-            # Optionally verify the transfer
-            if self.verify_transfer:
-                stat_cmd = [
-                    "ssh",
-                    "-o",
-                    "ConnectTimeout=10",
-                    f"{self.remote_user}@{self.remote_host}",
-                    f"stat -c %s {remote_path} 2>/dev/null || stat -f %z {remote_path} 2>/dev/null",
-                ]
-
-                result = subprocess.run(
-                    stat_cmd, capture_output=True, text=True, timeout=10
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    remote_size = int(result.stdout.strip())
-                    local_size = local_path.stat().st_size
-                    if remote_size != local_size:
-                        logger.warning(
-                            f"Size mismatch: local={local_size}, remote={remote_size}"
-                        )
-                    else:
-                        logger.debug(f"Transfer verified: {local_size} bytes")
+                logger.error(f"SCP failed: {result.stderr}")
+                return False
 
             logger.info(f"Successfully transferred to {self.remote_host}:{remote_path}")
             return True
 
         except subprocess.TimeoutExpired:
             logger.error(f"Transfer timed out for {local_path}")
-            logger.info("This might be due to SSH key authentication not being set up")
             return False
         except Exception as e:
             logger.error(f"Remote transfer failed: {e}")
