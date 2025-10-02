@@ -13,13 +13,6 @@ import win32serviceutil
 src_path = Path(__file__).parent.parent.parent
 if src_path.exists():
     sys.path.insert(0, str(src_path))
-else:
-    # Try to find it relative to the script
-    for parent in Path(__file__).parents:
-        potential_src = parent / "src"
-        if potential_src.exists():
-            sys.path.insert(0, str(potential_src))
-            break
 
 try:
     from image_transfer import Config, ImageTransferDaemon
@@ -87,12 +80,17 @@ class ImageTransferService(win32serviceutil.ServiceFramework):
             raise
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the service wrapper - handles install/remove/start commands."""
     if len(sys.argv) == 1:
-        # Service is starting
+        # Service is being started by Windows Service Manager
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(ImageTransferService)
         servicemanager.StartServiceCtrlDispatcher()
     else:
-        # Command line - install/remove/etc
+        # Command line - install/remove/start/stop/etc
         win32serviceutil.HandleCommandLine(ImageTransferService)
+
+
+if __name__ == "__main__":
+    main()

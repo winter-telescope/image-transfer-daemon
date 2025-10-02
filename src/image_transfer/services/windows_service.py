@@ -1,6 +1,5 @@
 """Windows service implementation for image transfer daemon."""
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,50 +10,45 @@ def install_windows_service():
     try:
         # Check if pywin32 is installed
         try:
-            import pythoncom
             import win32serviceutil
         except ImportError:
             print("Error: pywin32 is required for Windows service.")
             print("Install it with: pip install pywin32")
-            sys.exit(1)
-
-        # Find the service wrapper script
-        service_script = Path(__file__).parent / "windows_service_wrapper.py"
-
-        if not service_script.exists():
-            print(f"Error: Service wrapper not found at {service_script}")
+            print("Or reinstall with: pip install .[windows]")
             sys.exit(1)
 
         print("Installing Image Transfer Daemon service...")
 
-        # Run the service wrapper directly to install
-        # This needs to be run with pythonservice.exe from pywin32
+        # Use the entry point to install the service
         result = subprocess.run(
-            [sys.executable, str(service_script), "install"],
+            [
+                sys.executable,
+                "-m",
+                "image_transfer.services.windows_service_wrapper",
+                "install",
+            ],
             capture_output=True,
             text=True,
         )
 
-        print(result.stdout)
+        # Print the output
+        if result.stdout:
+            print(result.stdout)
         if result.stderr:
             print(result.stderr)
 
-        if result.returncode == 0 or "Service installed" in result.stdout:
+        # Check if installation was successful
+        if result.returncode == 0 or "successfully installed" in result.stdout.lower():
             print("\nService installed successfully!")
             print("\nTo start the service:")
             print("  net start ImageTransferDaemon")
             print("\nTo stop the service:")
             print("  net stop ImageTransferDaemon")
-            print("\nTo set auto-start:")
+            print("\nTo set auto-start on boot:")
             print("  sc config ImageTransferDaemon start=auto")
-
-            # Try to update the service to ensure it's properly configured
-            subprocess.run(
-                [sys.executable, str(service_script), "update"], capture_output=True
-            )
         else:
-            print(f"Installation may have failed. Try running directly:")
-            print(f"  python {service_script} install")
+            print("\nIf installation failed, try running as Administrator")
+            sys.exit(1)
 
     except Exception as e:
         print(f"Error installing service: {e}")
@@ -64,30 +58,30 @@ def install_windows_service():
 def uninstall_windows_service():
     """Uninstall Windows service."""
     try:
-        # Find the service wrapper script
-        service_script = Path(__file__).parent / "windows_service_wrapper.py"
+        print("Uninstalling Image Transfer Daemon service...")
 
-        if service_script.exists():
-            print("Removing service...")
-            result = subprocess.run(
-                [sys.executable, str(service_script), "remove"],
-                capture_output=True,
-                text=True,
-            )
+        # Use the entry point to remove the service
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "image_transfer.services.windows_service_wrapper",
+                "remove",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Print the output
+        if result.stdout:
             print(result.stdout)
-            if result.stderr:
-                print(result.stderr)
+        if result.stderr:
+            print(result.stderr)
+
+        if result.returncode == 0 or "successfully removed" in result.stdout.lower():
+            print("\nService uninstalled successfully!")
         else:
-            # Try using sc command as fallback
-            print("Stopping service...")
-            subprocess.run(["net", "stop", "ImageTransferDaemon"], capture_output=True)
-
-            print("Removing service...")
-            result = subprocess.run(
-                ["sc", "delete", "ImageTransferDaemon"], capture_output=True
-            )
-
-        print("Service uninstalled successfully!")
+            print("\nService may not have been installed")
 
     except Exception as e:
         print(f"Error uninstalling service: {e}")
