@@ -10,9 +10,26 @@ import win32service
 import win32serviceutil
 
 # Add the src directory to path so we can import image_transfer
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+src_path = Path(__file__).parent.parent.parent
+if src_path.exists():
+    sys.path.insert(0, str(src_path))
+else:
+    # Try to find it relative to the script
+    for parent in Path(__file__).parents:
+        potential_src = parent / "src"
+        if potential_src.exists():
+            sys.path.insert(0, str(potential_src))
+            break
 
-from image_transfer import Config, ImageTransferDaemon
+try:
+    from image_transfer import Config, ImageTransferDaemon
+except ImportError:
+    # If installed as package, import directly
+    try:
+        from image_transfer import Config, ImageTransferDaemon
+    except ImportError as e:
+        print(f"Failed to import image_transfer: {e}")
+        sys.exit(1)
 
 
 class ImageTransferService(win32serviceutil.ServiceFramework):
@@ -29,6 +46,7 @@ class ImageTransferService(win32serviceutil.ServiceFramework):
         self.running = True
 
     def SvcStop(self):
+        """Stop the service."""
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
         self.running = False
         win32event.SetEvent(self.hWaitStop)
@@ -36,6 +54,7 @@ class ImageTransferService(win32serviceutil.ServiceFramework):
             self.daemon.stop()
 
     def SvcDoRun(self):
+        """Run the service."""
         servicemanager.LogMsg(
             servicemanager.EVENTLOG_INFORMATION_TYPE,
             servicemanager.PYS_SERVICE_STARTED,
@@ -65,12 +84,15 @@ class ImageTransferService(win32serviceutil.ServiceFramework):
 
         except Exception as e:
             servicemanager.LogErrorMsg(f"Service error: {str(e)}")
+            raise
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
+        # Service is starting
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(ImageTransferService)
         servicemanager.StartServiceCtrlDispatcher()
     else:
+        # Command line - install/remove/etc
         win32serviceutil.HandleCommandLine(ImageTransferService)
