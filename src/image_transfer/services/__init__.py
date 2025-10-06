@@ -5,14 +5,17 @@ import sys
 from pathlib import Path
 
 
-def install_service():
+def install_service(with_password=False):
     """Install the image transfer daemon as a system service."""
     system = platform.system()
 
     if system == "Windows":
-        from .windows_service import install_windows_service
+        from .windows_service import install_windows_service, install_with_password
 
-        install_windows_service()
+        if with_password:
+            install_with_password()
+        else:
+            install_windows_service()
     elif system == "Linux":
         from .systemd import install_systemd_service
 
@@ -59,16 +62,21 @@ def main():
         "--uninstall", action="store_true", help="Uninstall the service"
     )
     parser.add_argument(
+        "--with-password",
+        action="store_true",
+        help="Install with password (Windows only, for background operation)",
+    )
+    parser.add_argument(
         "--startup",
         choices=["auto", "manual"],
         default="manual",
-        help="Set startup type (Windows only)",
+        help="Set startup type (not used with Task Scheduler)",
     )
 
     args = parser.parse_args()
 
     if args.install:
-        install_service()
+        install_service(with_password=args.with_password)
     elif args.uninstall:
         uninstall_service()
     else:

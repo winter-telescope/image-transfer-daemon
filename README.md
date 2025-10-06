@@ -28,8 +28,8 @@ image-transfer --create-config
 # Test run
 image-transfer -v
 
-# Install as service (no password needed on Windows!)
-# Windows (as admin): image-transfer-service --install
+# Install as service 
+# Windows: image-transfer-service --install  (NO ADMIN NEEDED!)
 # Linux: sudo image-transfer-service --install
 # macOS: image-transfer-service --install
 ```
@@ -140,46 +140,43 @@ image-transfer -v
 
 ## Service Installation & Management
 
-### Windows Service (Task Scheduler)
+### Windows Service (User-Level Task Scheduler)
 
-Windows uses Task Scheduler for user-level execution (no password required).
+Windows uses Task Scheduler at the user level - **no Administrator required!**
 
 #### Install service
 
-```powershell
-# Run PowerShell as Administrator
+```batch
+# No admin needed - just run normally!
 image-transfer-service --install
 
-# The service will:
-# - Run as your current user
-# - Start automatically when you log in
-# - Have access to your SSH keys and config files
-# - No password required!
+# Or if you want it to run even when logged out (requires password):
+image-transfer-service --install --with-password
 ```
 
 #### Start/Stop service
 
-```powershell
-# Using PowerShell commands
-Start-ScheduledTask -TaskName ImageTransferDaemon  # Start
-Stop-ScheduledTask -TaskName ImageTransferDaemon   # Stop
-Get-ScheduledTask -TaskName ImageTransferDaemon    # Status
+```batch
+# Simple batch commands (no admin needed)
+scripts\daemon.bat start
+scripts\daemon.bat stop
+scripts\daemon.bat status
+scripts\daemon.bat logs
 
-# Or use the management script
-.\scripts\manage-daemon.ps1 start
-.\scripts\manage-daemon.ps1 stop
-.\scripts\manage-daemon.ps1 status
-.\scripts\manage-daemon.ps1 logs
+# Or use schtasks directly
+schtasks /run /tn ImageTransferDaemon    # Start
+schtasks /end /tn ImageTransferDaemon    # Stop
+schtasks /query /tn ImageTransferDaemon  # Status
 ```
 
 #### Uninstall service
 
-```powershell
-# Uninstall the service
+```batch
+# No admin needed
 image-transfer-service --uninstall
 
-# Or manually with PowerShell
-Unregister-ScheduledTask -TaskName ImageTransferDaemon -Confirm:$false
+# Or
+scripts\daemon.bat uninstall
 ```
 
 ### Linux Service (systemd)
@@ -317,17 +314,20 @@ grep "Successfully transferred" ~/logs/image_transfer.log | grep "$(date +%Y-%m-
 
 ### Service-specific logs
 
-#### Windows Task Scheduler logs
+#### Windows logs
 
-```powershell
-# Check task status and last run time
-Get-ScheduledTask -TaskName ImageTransferDaemon | Get-ScheduledTaskInfo
+```batch
+# Check task status
+schtasks /query /tn ImageTransferDaemon
 
-# View application logs
+# View logs (simple)
+type %USERPROFILE%\logs\image_transfer.log
+
+# Or use the helper script
+scripts\daemon.bat logs
+
+# PowerShell (if you prefer)
 Get-Content $env:USERPROFILE\logs\image_transfer.log -Tail 50
-
-# Or use the management script
-.\scripts\manage-daemon.ps1 logs
 ```
 
 #### Linux systemd logs
@@ -444,12 +444,16 @@ ssh user@remote-host "echo 'Connection successful'"
    ssh user@remote-host "ls -la /path/to/remote/directory"
    ```
 
-3. **Service won't start**: Check logs for errors
-   - Windows: Check Task Scheduler or `Get-ScheduledTask -TaskName ImageTransferDaemon`
+3. **Windows: "Access Denied" during install**: 
+   - You don't need Administrator! Just run: `image-transfer-service --install`
+   - If you still get errors, try with password: `image-transfer-service --install --with-password`
+
+4. **Service won't start**: Check logs for errors
+   - Windows: `schtasks /query /tn ImageTransferDaemon /v`
    - Linux: `sudo journalctl -u image-transfer.service`
    - macOS: Console.app
 
-4. **Files not transferring**: Verify file patterns in config match your files
+5. **Files not transferring**: Verify file patterns in config match your files
    ```yaml
    file_patterns:
      - "*.fits"
@@ -457,7 +461,7 @@ ssh user@remote-host "echo 'Connection successful'"
      - "*.fit"
    ```
 
-5. **Network timeouts**: Increase timeout in configuration
+6. **Network timeouts**: Increase timeout in configuration
    ```yaml
    transfer_timeout_seconds: 300
    ```
