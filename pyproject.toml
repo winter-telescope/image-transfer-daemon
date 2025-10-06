@@ -25,26 +25,23 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
 dependencies = [
-    "watchdog",
-    "pyyaml",
+    "watchdog>=3.0.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-cov",
-    "black",
-    "ruff",
-    "ipykernel",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
 ]
-windows = [
-    "pywin32>=305; sys_platform == 'win32'",
-]
+# Note: No Windows-specific dependencies needed!
+# We use Task Scheduler instead of Windows Services
 
 [project.urls]
 "Homepage" = "https://github.com/yourusername/image-transfer-daemon"
 "Bug Tracker" = "https://github.com/yourusername/image-transfer-daemon/issues"
-
 
 [project.scripts]
 image-transfer = "image_transfer.__main__:main"
