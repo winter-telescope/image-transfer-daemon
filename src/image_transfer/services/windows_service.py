@@ -1,4 +1,4 @@
-"""Windows service implementation using user-level Task Scheduler (no admin needed)."""
+"""Windows service implementation using Startup folder (no permissions needed)."""
 
 import os
 import subprocess
@@ -7,225 +7,186 @@ from pathlib import Path
 
 
 def install_windows_service():
-    """Install as user-level scheduled task (no admin or password needed)."""
-    task_name = "ImageTransferDaemon"
+    """Install daemon using Windows Startup folder (no admin or special permissions needed)."""
 
-    print("Installing Image Transfer Daemon (User Level)...")
+    print("Installing Image Transfer Daemon...")
     print(f"Will run as: {os.environ.get('USERNAME')}")
-    print("No Administrator privileges required!\n")
+    print("Using Windows Startup folder - no special permissions needed!\n")
 
-    # Get Python executable path
+    # Get the CURRENT Python executable path (from conda environment)
     python_exe = sys.executable
+    print(f"Python environment: {python_exe}")
 
-    # Create a simple batch file to run the daemon
-    batch_file = Path.home() / ".config" / "image-transfer" / "run_daemon.bat"
-    batch_file.parent.mkdir(parents=True, exist_ok=True)
+    # Detect if we're in a conda environment
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        print(f"Conda environment detected: {conda_prefix}\n")
 
-    with open(batch_file, "w") as f:
-        f.write(f"@echo off\n")
-        f.write(f'cd /d "{Path.home()}"\n')
-        f.write(f'"{python_exe}" -m image_transfer\n')
-
-    # Use schtasks.exe which works without admin for user tasks
-    # This creates a task that starts at logon for the current user
-    cmd = [
-        "schtasks",
-        "/create",
-        "/tn",
-        task_name,
-        "/tr",
-        f'"{batch_file}"',
-        "/sc",
-        "onlogon",  # Start at logon
-        "/rl",
-        "limited",  # Run with limited privileges (no admin needed)
-        "/f",  # Force overwrite if exists
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode == 0:
-        print("✓ Task created successfully!")
-
-        # Start the task immediately
-        start_cmd = ["schtasks", "/run", "/tn", task_name]
-        start_result = subprocess.run(start_cmd, capture_output=True, text=True)
-
-        if start_result.returncode == 0:
-            print("✓ Daemon started!\n")
-        else:
-            print(f"Note: Could not start immediately: {start_result.stderr}\n")
-
-        print("The daemon will:")
-        print("  - Start automatically when you log in")
-        print("  - Run with your user account")
-        print("  - Have access to your SSH keys and config")
-        print("  - NO Administrator privileges needed!\n")
-
-        print("Commands (no admin needed):")
-        print(f"  Start:   schtasks /run /tn {task_name}")
-        print(f"  Stop:    schtasks /end /tn {task_name}")
-        print(f"  Status:  schtasks /query /tn {task_name}")
-        print(f"  Remove:  schtasks /delete /tn {task_name} /f")
-        print("\nView logs at: ~/logs/image_transfer.log")
-        print("\nTo see the task in Task Scheduler GUI:")
-        print("  1. Open Task Scheduler (taskschd.msc)")
-        print("  2. Look in 'Task Scheduler Library' (not under Microsoft)")
-
-    else:
-        if "access is denied" in result.stderr.lower():
-            print("Failed: Access denied.")
-            print("Trying alternative method with password...\n")
-            install_with_password()
-        else:
-            print("Installation failed!")
-            print(f"Error: {result.stderr}")
-            print("\nTry the password method:")
-            print("  image-transfer-service --install --with-password")
-
-
-def install_with_password():
-    """Install with password prompt for more reliable scheduling."""
-    import getpass
-
-    task_name = "ImageTransferDaemon"
-    username = os.environ.get("USERNAME")
-
-    print("Installing with password authentication...")
-    print(
-        "This creates a more reliable scheduled task that can run in the background.\n"
+    # Get the Startup folder path
+    startup_folder = (
+        Path(os.environ["APPDATA"])
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
     )
 
-    password = getpass.getpass(f"Enter password for {username}: ")
+    # Create a batch file to run the daemon WITH the correct Python
+    batch_file = startup_folder / "ImageTransferDaemon.bat"
 
-    # Get Python executable path
-    python_exe = sys.executable
+    # Create VBS script for hidden operation (no console window)
+    vbs_file = startup_folder / "ImageTransferDaemon.vbs"
 
-    # Create XML for more control over the task
-    xml_content = f"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>Automatically transfers FITS images to remote processing server</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <LogonType>Password</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>3</Count>
-    </RestartOnFailure>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>{python_exe}</Command>
-      <Arguments>-m image_transfer</Arguments>
-      <WorkingDirectory>{Path.home()}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>"""
+    # Write the batch file with FULL PATH to the correct Python
+    with open(batch_file, "w") as f:
+        f.write("@echo off\n")
+        f.write(f'cd /d "{Path.home()}"\n')
 
-    # Save XML to temp file
-    xml_file = Path.home() / ".config" / "image-transfer" / "task.xml"
-    xml_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(xml_file, "w", encoding="utf-16") as f:
-        f.write(xml_content)
+        # If in conda, activate it first
+        if conda_prefix:
+            # Find conda activation script
+            conda_bat = Path(conda_prefix).parent.parent / "condabin" / "conda.bat"
+            if not conda_bat.exists():
+                # Try alternative location
+                conda_bat = Path(conda_prefix) / "condabin" / "conda.bat"
 
-    # Create task with password
-    cmd = [
-        "schtasks",
-        "/create",
-        "/tn",
-        task_name,
-        "/xml",
-        str(xml_file),
-        "/ru",
-        username,
-        "/rp",
-        password,
-        "/f",
-    ]
+            if conda_bat.exists():
+                f.write(f'call "{conda_bat}" activate "{conda_prefix}"\n')
+            else:
+                # Just use the full Python path directly
+                print("Warning: Could not find conda.bat, using Python directly")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+        # Use the FULL PATH to Python from current environment
+        f.write(f'"{python_exe}" -m image_transfer\n')
 
-    # Clean up XML file
-    try:
-        xml_file.unlink()
-    except:
-        pass
+    # Write the VBS file that runs the batch file hidden
+    with open(vbs_file, "w") as f:
+        f.write('Set WshShell = CreateObject("WScript.Shell")\n')
+        f.write(f'WshShell.Run """{batch_file}""", 0\n')
+        f.write("Set WshShell = Nothing\n")
 
+    print("✓ Startup files created with correct Python environment!")
+
+    # Test that the module can be imported with this Python
+    test_cmd = [python_exe, "-c", 'import image_transfer; print("Module found")']
+    result = subprocess.run(test_cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        print("✓ Service installed successfully with password!\n")
-
-        # Start the task
-        start_cmd = ["schtasks", "/run", "/tn", task_name]
-        subprocess.run(start_cmd, capture_output=True)
-
-        print("The daemon is now running and will:")
-        print("  - Start automatically when you log in")
-        print("  - Run in the background even when logged out")
-        print("  - Have access to your SSH keys and config")
-        print("  - Restart automatically if it crashes\n")
-
-        print("Commands:")
-        print(f"  Start:   schtasks /run /tn {task_name}")
-        print(f"  Stop:    schtasks /end /tn {task_name}")
-        print(f"  Status:  schtasks /query /tn {task_name}")
-        print(f"  Remove:  schtasks /delete /tn {task_name} /f")
-
+        print("✓ Verified image_transfer module is accessible\n")
     else:
-        print("Installation failed!")
-        if "incorrect" in result.stderr.lower() or "0x80070569" in result.stderr:
-            print("Incorrect password. Please try again.")
-        else:
-            print(f"Error: {result.stderr}")
+        print(
+            "Warning: Could not verify module access. Make sure package is installed in this environment!"
+        )
+        print(f"Error: {result.stderr}\n")
+
+    # Start the daemon immediately WITH THE CORRECT PYTHON
+    print("Starting the daemon now...")
+    subprocess.Popen(
+        [python_exe, "-m", "image_transfer"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
+
+    print("✓ Daemon started!\n")
+
+    # Also try to create a scheduled task as backup (but don't fail if it doesn't work)
+    try:
+        create_simple_task()
+    except:
+        pass  # Ignore if task creation fails
+
+    # Start the daemon immediately
+    print("\nStarting the daemon now...")
+    subprocess.Popen(
+        [python_exe, "-m", "image_transfer"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+    )
+
+    print("✓ Daemon started!\n")
+
+    print("The daemon will:")
+    print("  - Start automatically when Windows starts")
+    print("  - Run with your user account")
+    print("  - Have access to your SSH keys and config")
+    print("  - Run silently in the background\n")
+
+    print("Installation complete! The daemon is now running.")
+    print(f"\nStartup files location: {startup_folder}")
+    print("\nTo verify it's running:")
+    print("  tasklist | findstr python")
+    print("\nTo stop the daemon:")
+    print('  taskkill /F /IM python.exe /FI "WINDOWTITLE eq image_transfer"')
+    print("\nView logs at: ~/logs/image_transfer.log")
+
+
+def create_simple_task():
+    """Try to create a basic scheduled task (optional, may fail due to permissions)."""
+    # Very simple task creation without special flags
+    cmd = f'schtasks /create /tn ImageTransferDaemon /tr "pythonw -m image_transfer" /sc onstart /f'
+    subprocess.run(cmd, shell=True, capture_output=True)
 
 
 def uninstall_windows_service():
-    """Uninstall scheduled task (no admin needed)."""
-    task_name = "ImageTransferDaemon"
+    """Uninstall daemon by removing startup files."""
 
-    print(f"Uninstalling {task_name}...")
+    print("Uninstalling Image Transfer Daemon...")
 
-    # First try to stop it
-    stop_cmd = ["schtasks", "/end", "/tn", task_name]
-    subprocess.run(stop_cmd, capture_output=True, text=True)
+    # Remove from Startup folder
+    startup_folder = (
+        Path(os.environ["APPDATA"])
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+    )
 
-    # Delete the task
-    delete_cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
-    result = subprocess.run(delete_cmd, capture_output=True, text=True)
+    removed = False
 
-    if (
-        "cannot find the file" in result.stderr.lower()
-        or "system cannot find" in result.stderr.lower()
-    ):
-        print("Service was not installed")
-    elif result.returncode == 0:
-        print("Service uninstalled successfully!")
+    # Remove batch file
+    batch_file = startup_folder / "ImageTransferDaemon.bat"
+    if batch_file.exists():
+        batch_file.unlink()
+        removed = True
+
+    # Remove VBS file
+    vbs_file = startup_folder / "ImageTransferDaemon.vbs"
+    if vbs_file.exists():
+        vbs_file.unlink()
+        removed = True
+
+    # Try to remove scheduled task if it exists
+    try:
+        subprocess.run(
+            "schtasks /delete /tn ImageTransferDaemon /f",
+            shell=True,
+            capture_output=True,
+        )
+    except:
+        pass
+
+    # Try to stop running instances
+    try:
+        subprocess.run(
+            'taskkill /F /IM python.exe /FI "COMMANDLINE like *image_transfer*"',
+            shell=True,
+            capture_output=True,
+        )
+        print("Stopped running daemon instances")
+    except:
+        pass
+
+    if removed:
+        print("✓ Service uninstalled successfully!")
     else:
-        print(f"Error: {result.stderr}")
+        print("Service was not installed")
+
+
+def install_with_password():
+    """Fallback method - just use the startup folder."""
+    print("Note: Password method not needed with Startup folder approach.")
+    print("Using standard installation instead...\n")
+    install_windows_service()
