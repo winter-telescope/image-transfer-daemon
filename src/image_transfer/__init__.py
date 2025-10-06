@@ -1,10 +1,7 @@
-"""Image Transfer Daemon - Automatic FITS file transfer system."""
-
-__version__ = "1.0.0"
-__author__ = "Nate Lourie"
+"""Image Transfer - Cross-platform file synchronization system."""
 
 from .config import Config
-from .daemon import ImageTransferDaemon
-from .handler import ImageTransferHandler
+from .transfer import ImageTransfer
 
-__all__ = ["ImageTransferDaemon", "ImageTransferHandler", "Config"]
+__version__ = "0.1.0"
+__all__ = ["Config", "ImageTransfer"]

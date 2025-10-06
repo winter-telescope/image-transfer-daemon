@@ -3,15 +3,15 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "image-transfer-daemon"
-version = "1.0.0"
-authors = [
-    {name = "Your Name", email = "your.email@example.com"},
-]
-description = "Cross-platform daemon for automatic FITS image transfers"
+name = "image-transfer"
+version = "0.1.0"
+description = "Cross-platform image file transfer system with scheduling support"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -22,11 +22,12 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
+
 dependencies = [
-    "watchdog>=3.0.0",
-    "pyyaml>=6.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -34,30 +35,47 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "black>=23.0",
-    "ruff>=0.1.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
 ]
-# Note: No Windows-specific dependencies needed!
-# We use Task Scheduler instead of Windows Services
-
-[project.urls]
-"Homepage" = "https://github.com/yourusername/image-transfer-daemon"
-"Bug Tracker" = "https://github.com/yourusername/image-transfer-daemon/issues"
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.0",
+]
 
 [project.scripts]
-image-transfer = "image_transfer.__main__:main"
-image-transfer-service = "image_transfer.services:main"
+image-transfer = "image_transfer.cli:main"
+image-transfer-setup = "image_transfer.scheduler:setup"
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/image-transfer"
+"Bug Reports" = "https://github.com/yourusername/image-transfer/issues"
+"Source" = "https://github.com/yourusername/image-transfer"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+[tool.setuptools.package-data]
+image_transfer = ["../config/default_config.yaml"]
 
 [tool.black]
-line-length = 100
+line-length = 88
 target-version = ['py38']
 
-[tool.ruff]
-line-length = 100
-select = ["E", "F", "W", "I", "N"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=image_transfer --cov-report=html --cov-report=term"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [".git", "__pycache__", "build", "dist"]
