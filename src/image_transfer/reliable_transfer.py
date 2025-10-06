@@ -23,8 +23,8 @@ class ReliableTransferDaemon:
 
     def __init__(self, config_path=None):
         """Initialize the daemon."""
-        self.config = self.load_config(config_path)
         self.setup_logging()
+        self.config = self.load_config(config_path)
 
         # State file to track transferred files
         self.state_file = (
