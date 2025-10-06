@@ -18,9 +18,6 @@ Cross-platform watchdog daemon which watches a specific folder and transfers dat
 # Install
 pip install .
 
-# Windows only: install with service support
-pip install ".[windows]"
-
 # Create config
 image-transfer --create-config
 
@@ -31,7 +28,7 @@ image-transfer --create-config
 # Test run
 image-transfer -v
 
-# Install as service
+# Install as service (no password needed on Windows!)
 # Windows (as admin): image-transfer-service --install
 # Linux: sudo image-transfer-service --install
 # macOS: image-transfer-service --install
@@ -59,6 +56,8 @@ pip install -e ".[dev]"
 git clone <repo>
 cd image-transfer-daemon
 pip install .
+
+# No extra dependencies needed for any platform!
 ```
 
 ### Platform-specific installations
@@ -74,10 +73,8 @@ cd image-transfer-daemon
 conda create --prefix .conda python=3.11
 conda activate .\.conda
 
-# Install with development and Windows service dependencies
-pip install -e ".[dev,windows]"
-
-# Note: The [windows] extra installs pywin32 which is required for Windows service
+# Install with development dependencies
+pip install -e ".[dev]"
 ```
 
 #### Linux/macOS development setup
@@ -143,55 +140,46 @@ image-transfer -v
 
 ## Service Installation & Management
 
-### Windows Service
+### Windows Service (Task Scheduler)
+
+Windows uses Task Scheduler for user-level execution (no password required).
 
 #### Install service
 
 ```powershell
 # Run PowerShell as Administrator
-
-# If installed via pip
 image-transfer-service --install
 
-# Or from the repository directory
-cd path\to\image-transfer-daemon
-python scripts\install-service.py --install
-
-# Install with auto-start on boot
-image-transfer-service --install --startup auto
+# The service will:
+# - Run as your current user
+# - Start automatically when you log in
+# - Have access to your SSH keys and config files
+# - No password required!
 ```
 
 #### Start/Stop service
 
 ```powershell
-# Start service
-net start ImageTransferDaemon
-# Or
-sc start ImageTransferDaemon
+# Using PowerShell commands
+Start-ScheduledTask -TaskName ImageTransferDaemon  # Start
+Stop-ScheduledTask -TaskName ImageTransferDaemon   # Stop
+Get-ScheduledTask -TaskName ImageTransferDaemon    # Status
 
-# Stop service  
-net stop ImageTransferDaemon
-# Or
-sc stop ImageTransferDaemon
-
-# Restart service
-net stop ImageTransferDaemon && net start ImageTransferDaemon
-
-# Check service status
-sc query ImageTransferDaemon
-# Or use Services GUI: Win+R → services.msc → find "Image Transfer Daemon"
+# Or use the management script
+.\scripts\manage-daemon.ps1 start
+.\scripts\manage-daemon.ps1 stop
+.\scripts\manage-daemon.ps1 status
+.\scripts\manage-daemon.ps1 logs
 ```
 
 #### Uninstall service
 
 ```powershell
-# Stop service first
-net stop ImageTransferDaemon
-
-# Remove service
-sc delete ImageTransferDaemon
-# Or
+# Uninstall the service
 image-transfer-service --uninstall
+
+# Or manually with PowerShell
+Unregister-ScheduledTask -TaskName ImageTransferDaemon -Confirm:$false
 ```
 
 ### Linux Service (systemd)
@@ -329,15 +317,17 @@ grep "Successfully transferred" ~/logs/image_transfer.log | grep "$(date +%Y-%m-
 
 ### Service-specific logs
 
-#### Windows Event Log
+#### Windows Task Scheduler logs
 
 ```powershell
-# Check Windows Event Log for service events
-Get-EventLog -LogName Application -Source ImageTransferDaemon -Newest 20
+# Check task status and last run time
+Get-ScheduledTask -TaskName ImageTransferDaemon | Get-ScheduledTaskInfo
 
-# Or use Event Viewer GUI
-eventvwr.msc
-# Navigate to: Windows Logs → Application → Filter by "ImageTransferDaemon"
+# View application logs
+Get-Content $env:USERPROFILE\logs\image_transfer.log -Tail 50
+
+# Or use the management script
+.\scripts\manage-daemon.ps1 logs
 ```
 
 #### Linux systemd logs
@@ -455,18 +445,11 @@ ssh user@remote-host "echo 'Connection successful'"
    ```
 
 3. **Service won't start**: Check logs for errors
-   - Windows: Event Viewer
+   - Windows: Check Task Scheduler or `Get-ScheduledTask -TaskName ImageTransferDaemon`
    - Linux: `sudo journalctl -u image-transfer.service`
    - macOS: Console.app
 
-4. **Windows service installation fails**: Ensure pywin32 is installed
-   ```powershell
-   pip install pywin32
-   # Or reinstall with Windows support
-   pip install ".[windows]"
-   ```
-
-5. **Files not transferring**: Verify file patterns in config match your files
+4. **Files not transferring**: Verify file patterns in config match your files
    ```yaml
    file_patterns:
      - "*.fits"
@@ -474,7 +457,7 @@ ssh user@remote-host "echo 'Connection successful'"
      - "*.fit"
    ```
 
-6. **Network timeouts**: Increase timeout in configuration
+5. **Network timeouts**: Increase timeout in configuration
    ```yaml
    transfer_timeout_seconds: 300
    ```
