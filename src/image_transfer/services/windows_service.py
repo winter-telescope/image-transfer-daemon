@@ -1,133 +1,103 @@
-"""Windows service implementation for image transfer daemon."""
+"""Windows service implementation using Task Scheduler for user-level execution."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 
 def install_windows_service():
-    """Install Windows service using pywin32."""
-    try:
-        # Check if pywin32 is installed
-        try:
-            import win32service
-            import win32serviceutil
-        except ImportError:
-            print("Error: pywin32 is required for Windows service.")
-            print("Install it with: pip install pywin32")
-            print("Or reinstall with: pip install .[windows]")
-            sys.exit(1)
+    """Install as scheduled task (runs as current user, no password needed)."""
+    task_name = "ImageTransferDaemon"
 
-        print("Installing Image Transfer Daemon service...")
+    print("Installing Image Transfer Daemon...")
+    print(f"Will run as: {os.environ.get('USERNAME')}")
+    print("Using Task Scheduler (no password required)\n")
 
-        # Find the wrapper script
-        wrapper_path = Path(__file__).parent / "windows_service_wrapper.py"
+    # Get Python executable path
+    python_exe = sys.executable
 
-        if not wrapper_path.exists():
-            print(f"Error: Service wrapper not found at {wrapper_path}")
-            sys.exit(1)
+    # Build PowerShell command to create scheduled task
+    ps_script = f"""
+    $TaskName = "{task_name}"
+    $Description = "Automatically transfers FITS images to remote processing server"
 
-        # Add the services directory to Python path so we can import the wrapper
-        services_dir = wrapper_path.parent
-        if str(services_dir) not in sys.path:
-            sys.path.insert(0, str(services_dir))
+    # Create the action
+    $Action = New-ScheduledTaskAction -Execute "{python_exe}" -Argument "-m image_transfer" -WorkingDirectory "$HOME"
 
-        try:
-            # Import the wrapper module
-            from windows_service_wrapper import ImageTransferService
+    # Create trigger to start at logon and keep running
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERNAME"
 
-            # Save original argv and replace with install command
-            original_argv = sys.argv
-            sys.argv = [str(wrapper_path), "install"]
+    # Create principal (current user with highest privileges)
+    $Principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Highest
 
-            # Install the service using HandleCommandLine
-            win32serviceutil.HandleCommandLine(ImageTransferService)
+    # Create settings
+    $Settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Days 365)
 
-            # Restore argv
-            sys.argv = original_argv
+    # Register the task
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Description $Description `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Principal $Principal `
+        -Settings $Settings `
+        -Force
 
-            print("\nService installed successfully!")
-            print("\nTo start the service:")
-            print("  net start ImageTransferDaemon")
-            print("\nTo stop the service:")
-            print("  net stop ImageTransferDaemon")
-            print("\nTo set auto-start on boot:")
-            print("  sc config ImageTransferDaemon start=auto")
+    # Start the task
+    Start-ScheduledTask -TaskName $TaskName
+    """
 
-        except ImportError as e:
-            print(f"Failed to import service wrapper: {e}")
-            print(f"Wrapper should be at: {wrapper_path}")
-            sys.exit(1)
+    # Run PowerShell command
+    result = subprocess.run(
+        ["powershell", "-Command", ps_script], capture_output=True, text=True
+    )
 
-    except Exception as e:
-        print(f"Error installing service: {e}")
-        import traceback
-
-        traceback.print_exc()
-        sys.exit(1)
-
-    except Exception as e:
-        print(f"Error installing service: {e}")
-        import traceback
-
-        traceback.print_exc()
+    if result.returncode == 0:
+        print("✓ Service installed successfully!\n")
+        print("The daemon is now running and will:")
+        print("  - Start automatically when you log in")
+        print("  - Run with your user account")
+        print("  - Have access to your SSH keys and config")
+        print("  - Restart automatically if it crashes\n")
+        print("Commands:")
+        print(f"  Start:   Start-ScheduledTask -TaskName {task_name}")
+        print(f"  Stop:    Stop-ScheduledTask -TaskName {task_name}")
+        print(f"  Status:  Get-ScheduledTask -TaskName {task_name}")
+        print(
+            f"  Remove:  Unregister-ScheduledTask -TaskName {task_name} -Confirm:$false"
+        )
+        print("\nView logs at: ~/logs/image_transfer.log")
+    else:
+        print("Installation failed!")
+        print(result.stderr)
+        print("\nTry running as Administrator")
         sys.exit(1)
 
 
 def uninstall_windows_service():
-    """Uninstall Windows service."""
-    try:
-        import win32serviceutil
+    """Uninstall scheduled task."""
+    task_name = "ImageTransferDaemon"
 
-        print("Uninstalling Image Transfer Daemon service...")
+    print(f"Uninstalling {task_name}...")
 
-        # Find the wrapper script
-        wrapper_path = Path(__file__).parent / "windows_service_wrapper.py"
+    # PowerShell command to remove task
+    ps_script = f"""
+    Stop-ScheduledTask -TaskName "{task_name}" -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "{task_name}" -Confirm:$false
+    """
 
-        if wrapper_path.exists():
-            # Add the services directory to Python path
-            services_dir = wrapper_path.parent
-            if str(services_dir) not in sys.path:
-                sys.path.insert(0, str(services_dir))
+    result = subprocess.run(
+        ["powershell", "-Command", ps_script], capture_output=True, text=True
+    )
 
-            try:
-                # Import the wrapper module
-                from windows_service_wrapper import ImageTransferService
-
-                # Save original argv and replace with remove command
-                original_argv = sys.argv
-                sys.argv = [str(wrapper_path), "remove"]
-
-                # Remove the service using HandleCommandLine
-                win32serviceutil.HandleCommandLine(ImageTransferService)
-
-                # Restore argv
-                sys.argv = original_argv
-
-                print("\nService uninstalled successfully!")
-
-            except ImportError as e:
-                print(f"Failed to import service wrapper: {e}")
-                # Fallback to sc command
-                import subprocess
-
-                print("Using sc command to remove service...")
-                subprocess.run(
-                    ["sc", "stop", "ImageTransferDaemon"], capture_output=True
-                )
-                subprocess.run(
-                    ["sc", "delete", "ImageTransferDaemon"], capture_output=True
-                )
-                print("Service removed")
-        else:
-            # Fallback to sc command
-            import subprocess
-
-            print("Using sc command to remove service...")
-            subprocess.run(["sc", "stop", "ImageTransferDaemon"], capture_output=True)
-            subprocess.run(["sc", "delete", "ImageTransferDaemon"], capture_output=True)
-            print("Service removed")
-
-    except Exception as e:
-        print(f"Error uninstalling service: {e}")
-        sys.exit(1)
+    if "cannot find the file specified" in result.stderr.lower():
+        print("Service was not installed")
+    else:
+        print("Service uninstalled successfully!")
