@@ -18,7 +18,7 @@ file_patterns:
 
 
 # Logging configuration
-log_level: DEBUG
+log_level: INFO
 log_directory: ~/logs
 log_file: image_transfer.log
 log_max_bytes: 52428800     # 50 MB
