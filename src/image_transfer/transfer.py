@@ -349,7 +349,7 @@ def transfer_once(
             rsync_options=rsync_opts,
         )
 
-        logging.info(f"running this command: {cmd}")
+        logging.debug(f"running this command: {cmd}")
 
         logging.debug("Executing: %s", " ".join(shlex.quote(c) for c in cmd))
         rc, copied, lines = run_rsync_cmd(cmd)
