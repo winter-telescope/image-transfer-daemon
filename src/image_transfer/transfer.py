@@ -199,22 +199,33 @@ def build_rsync_cmd(
     return ["rsync", *rsync_options, str(src_file), remote_spec]
 
 
-def run_rsync_cmd(cmd: list[str]) -> int:
+def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, str]:
+    """
+    Run rsync and detect whether the file was actually transferred.
+
+    Returns: (returncode, copied, raw_output)
+      - copied=True if rsync itemized a file transfer (line starts with '>f')
+    """
     logging.debug("Running: %s", " ".join(shlex.quote(c) for c in cmd))
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
-    if proc.returncode == 0:
-        if proc.stdout.strip():
-            logging.debug("rsync stdout: %s", proc.stdout.strip())
+    out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+
+    copied = False
+    # Parse itemized lines (requires -i). '>f' = a file was written on receiver.
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith(">f"):  # e.g. ">f.st...... some/file.fits"
+            copied = True
+            break
+
+    if proc.returncode != 0:
+        logging.error("rsync failed (%d)\n%s", proc.returncode, out)
     else:
-        logging.error(
-            "rsync failed (%d)\nSTDOUT:\n%s\nSTDERR:\n%s",
-            proc.returncode,
-            proc.stdout.strip(),
-            proc.stderr.strip(),
-        )
-    return proc.returncode
+        logging.debug("rsync output:\n%s", out.strip())
+
+    return proc.returncode, copied, out
 
 
 def transfer_once(
@@ -303,11 +314,13 @@ def transfer_once(
             remote_dir=remote_dir,
             rsync_options=rsync_opts,
         )
-        rc = run_rsync_cmd(cmd)
+        rc, copied, _ = run_rsync_cmd(cmd)
         if rc != 0:
             failures += 1
+        elif copied:
+            logging.info("Copied: %s", src)
         else:
-            logging.info("Transferred: %s", src)
+            logging.info("Skipped (exists/up-to-date): %s", src)
 
     if failures:
         logging.error(

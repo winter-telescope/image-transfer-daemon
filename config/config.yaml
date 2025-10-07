@@ -33,8 +33,7 @@ exclude_patterns: []  # Patterns to exclude from transfer
 #   - "test_*.fits"
 
 rsync_options:
-  - -avP
+  - -avPi
   - --mkpath # Create destination directories as needed
-  - --ignore-existing # Skip files that already exist on remote
   # - --remove-source-files # Uncomment to delete local files after transfer
   
