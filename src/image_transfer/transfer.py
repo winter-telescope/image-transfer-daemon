@@ -223,11 +223,6 @@ ITEMIZED_RE = re.compile(r"^(?P<icode>[<>ch\.][^\s]*)\s+(?P<name>.+)$")
 
 
 def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
-    """
-    Run rsync and detect whether at least one file was actually transferred.
-
-    Returns (rc, copied_any, itemized_lines)
-    """
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
@@ -235,17 +230,20 @@ def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
 
-    # With --out-format=%i %n, rsync prints ONE line per updated/created file on stdout.
-    # Example: '>f+++++++++ some/file.fits'
     lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
-
-    # Fall back: sometimes rsync mixes into stderr when -P is used; keep this for visibility.
-    # (We won't parse stderr, but log it at DEBUG so you can inspect it.)
     if stderr.strip():
         logging.debug("rsync stderr:\n%s", stderr.strip())
 
-    # copied if any itemized line starts with '>f' (receiver wrote a regular file)
-    copied_any = any(ln.startswith(">f") for ln in lines)
+    copied_any = False
+    itemized = []
+    for ln in lines:
+        m = ITEMIZED_RE.match(ln)
+        if not m:
+            continue
+        itemized.append(ln)
+        code = m.group("icode")
+        if code.startswith(("<f", ">f")):  # file written on sender or receiver
+            copied_any = True
 
     if proc.returncode != 0:
         logging.error(
@@ -255,10 +253,10 @@ def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
             stderr.strip(),
         )
     else:
-        if lines:
-            logging.debug("rsync itemized:\n%s", "\n".join(lines))
+        if itemized:
+            logging.debug("rsync itemized:\n%s", "\n".join(itemized))
 
-    return proc.returncode, copied_any, lines
+    return proc.returncode, copied_any, itemized
 
 
 def transfer_once(
