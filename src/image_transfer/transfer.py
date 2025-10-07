@@ -9,6 +9,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from distutils import cmd
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
@@ -225,32 +226,35 @@ def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
     """
     Run rsync and detect whether at least one file was actually transferred.
 
-    Returns: (returncode, copied_any, itemized_lines)
-      - copied_any=True if any itemized line indicates a receiver-side file write (>f*)
-      - itemized_lines: all parsed %i/%n lines for logging/debug
+    Returns (rc, copied_any, itemized_lines)
     """
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
 
-    # Collect both streams; with -P progress, rsync writes to stderr
-    lines = []
-    for stream in (proc.stdout or "").splitlines() + (proc.stderr or "").splitlines():
-        m = ITEMIZED_RE.match(stream.strip())
-        if m:
-            lines.append(stream.strip())
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
 
-    copied_any = any(line.startswith(">f") for line in lines)
+    # With --out-format=%i %n, rsync prints ONE line per updated/created file on stdout.
+    # Example: '>f+++++++++ some/file.fits'
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+
+    # Fall back: sometimes rsync mixes into stderr when -P is used; keep this for visibility.
+    # (We won't parse stderr, but log it at DEBUG so you can inspect it.)
+    if stderr.strip():
+        logging.debug("rsync stderr:\n%s", stderr.strip())
+
+    # copied if any itemized line starts with '>f' (receiver wrote a regular file)
+    copied_any = any(ln.startswith(">f") for ln in lines)
 
     if proc.returncode != 0:
         logging.error(
             "rsync failed (%d)\nSTDOUT:\n%s\nSTDERR:\n%s",
             proc.returncode,
-            (proc.stdout or "").strip(),
-            (proc.stderr or "").strip(),
+            stdout.strip(),
+            stderr.strip(),
         )
     else:
-        # Keep debug noisy; normal info logs below
         if lines:
             logging.debug("rsync itemized:\n%s", "\n".join(lines))
 
@@ -349,7 +353,10 @@ def transfer_once(
 
         logging.info(f"running this command: {cmd}")
 
+        logging.debug("Executing: %s", " ".join(shlex.quote(c) for c in cmd))
         rc, copied, lines = run_rsync_cmd(cmd)
+        logging.debug("rsync returned rc=%s, copied=%s", rc, copied)
+        logging.debug("itemized lines: %r", lines)
         if rc != 0:
             failures += 1
         elif copied:
