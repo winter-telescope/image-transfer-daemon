@@ -3,9 +3,22 @@
 This is a small module for using rsync to transfer images from one computer to another. It relies on ssh keys allowing access without a password.
 
 ## Installing
+Set up a dedicated python environment. Eg, if you use conda, make a conda environment in the top level repository, here called ".conda":
+
+```bash:
+conda create --prefix .conda python=3.11
+```
+
+Then activate that environment:
+
+```bash:
+conda activate ./.conda
+```
+
+Now install the module and dependencies:
 
 ```python:
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ## Setup/Use
@@ -34,7 +47,7 @@ file_patterns:
 
 
 # Logging configuration
-log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+log_level: INFO  # DEBUG, INFO, WARNING, ERROR to see other levels of entries in the log
 log_directory: ~/logs
 log_file: image_transfer.log
 
@@ -45,12 +58,12 @@ exclude_patterns: []  # Patterns to exclude from transfer
 # exclude_patterns:
 #   - "*_temp.fits"
 #   - "test_*.fits"
+```
 
-rsync_options:
-  - -avP
-  - --mkpath # Create destination directories as needed
-  - --ignore-existing # Skip files that already exist on remote
-  # - --remove-source-files # Uncomment to delete local files after transfer
+You can then tail the log (eg the last 200 lines) with:
+
+```bash:
+tail -fn 200 ~/logs/image_transfer.log
 ```
 
 ### Running the Transfer
