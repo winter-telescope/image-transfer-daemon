@@ -102,7 +102,22 @@ source /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/etc/profil
 ## Setting up a cron job
 Example: run the image transfer every minute:
 
-
 ```bash:
 * * * * * /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli
 ```
+
+On windows + wsl, to ensure that wsl+cron runs always even on reboot:
+
+You need to have the cron service running:
+
+```bash:
+sudo service cron start
+```
+
+
+To have it run automatically after reboot, set up a Windows Task Scheduler entry that runs:
+```bash:
+wsl.exe -d Ubuntu -u root service cron start
+```
+
+
