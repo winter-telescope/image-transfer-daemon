@@ -3,47 +3,27 @@
 
 # Local directory to watch for new images
 # Supports ~ for home directory
-watch_path: ~/data/images
+watch_path: /mnt/c/Users/oir-user/data/images/NIGHT/spring
 
 # Remote server configuration
 remote_host: freya
 remote_user: winter
-remote_base_path: ~/data/images
-
-# Camera name (optional)
-# If set, files will be organized in camera-specific subfolders
-# e.g., /data/images/20251002/camera_name/image.fits
-camera_name: spring # Set to null or "" to disable
-
-# Transfer method
-# Options: auto (try rsync then scp), scp, rsync, local
-transfer_method: auto
+remote_base_path: ~/data/images/NIGHT/spring
 
 # File patterns to watch (glob patterns)
 # Case-insensitive on Windows
 file_patterns:
   - "*.fits"
-  - "*.fit"
-  - "*.FIT"
   - "*.FITS"
 
-# Transfer verification
-# If true, verify file size after transfer
-verify_transfer: true
-
-# Retry configuration
-retry_attempts: 3
-retry_delay: 5  # seconds between retry attempts
-
-# Compression during transfer
-# Generally false for FITS files as they don't compress well
-compression: false
 
 # Logging configuration
-log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+log_level: INFO
 log_directory: ~/logs
-log_rotation_size_mb: 10
-log_backup_count: 5
+log_file: image_transfer.log
+log_max_bytes: 52428800     # 50 MB
+log_backup_count: 5         # keep 5 rotated files: .1 .. .5
+
 
 # File handling
 min_file_age_seconds: 2  # Wait for file to be stable before transfer
@@ -52,7 +32,9 @@ exclude_patterns: []  # Patterns to exclude from transfer
 #   - "*_temp.fits"
 #   - "test_*.fits"
 
-# Performance tuning
-transfer_timeout_seconds: 300  # Timeout for individual file transfers
-parallel_transfers: 1  # Number of simultaneous transfers
-transfer_queue_size: 100  # Maximum number of files to queue
+rsync_options:
+  - -avP
+  - --mkpath # Create destination directories as needed
+  - --ignore-existing # Skip files that already exist on remote
+  # - --remove-source-files # Uncomment to delete local files after transfer
+  

@@ -1,556 +1,108 @@
-# image-transfer-daemon
+# Image Transfer Tool
 
-Cross-platform watchdog daemon which watches a specific folder and transfers data from that folder to another computer using scp/rsync.
+This is a small module for using rsync to transfer images from one computer to another. It relies on ssh keys allowing access without a password.
 
-## Features
+## Installing
 
-- Monitors directories for new FITS files
-- Automatically transfers files to remote systems
-- Maintains directory structure (YYYYMMDD format)
-- Cross-platform: Windows, Linux, macOS
-- Multiple transfer methods (scp, rsync, local)
-- Automatic retry on failure
-- Service/daemon installation for all platforms
-
-## Quick Start
-
-```bash
-# Install
-pip install .
-
-# Create config
-image-transfer --create-config
-
-# Edit config
-# Windows: notepad %USERPROFILE%\.config\image-transfer\config.yaml
-# Linux/Mac: nano ~/.config/image-transfer/config.yaml
-
-# Test run
-image-transfer -v
-
-# Install as service 
-# Windows: image-transfer-service --install  (NO ADMIN NEEDED!)
-# Linux: sudo image-transfer-service --install
-# macOS: image-transfer-service --install
-```
-
-## Installation
-
-### Install from source (development)
-
-```bash
-git clone <repo>
-cd image-transfer-daemon
-
-# Create conda environment (recommended for development)
-conda create --prefix .conda python=3.11
-conda activate ./.conda
-
-# Install in development mode with all dependencies
+```python:
 pip install -e ".[dev]"
 ```
 
-### Install from source (production)
+## Setup/Use
+### Transfer Configuration
+The default config is in `config/config.yaml`, which describes which folder to rsync from --> to. It also has entries for describing the details of which files to transfer/ignore, rsync options, and which folders to monitor and transfer from/to.
 
-```bash
-git clone <repo>
-cd image-transfer-daemon
-pip install .
+Example config:
+```yaml:
+# Image Transfer Daemon - Default Configuration
+# Copy this file and modify for your specific setup
 
-# No extra dependencies needed for any platform!
-```
+# Local directory to watch for new images
+# Supports ~ for home directory
+watch_path: /mnt/c/Users/oir-user/data/images/NIGHT/spring
 
-### Platform-specific installations
-
-#### Windows development setup
-
-```powershell
-# Clone repository
-git clone <repo>
-cd image-transfer-daemon
-
-# Create conda environment
-conda create --prefix .conda python=3.11
-conda activate .\.conda
-
-# Install with development dependencies
-pip install -e ".[dev]"
-```
-
-#### Linux/macOS development setup
-
-```bash
-# Clone repository
-git clone <repo>
-cd image-transfer-daemon
-
-# Create virtual environment (alternative to conda)
-python3 -m venv venv
-source venv/bin/activate
-
-# Install with development dependencies
-pip install -e ".[dev]"
-```
-
-## Configuration
-
-After installation, create your configuration file:
-
-```bash
-# Create default YAML configuration
-image-transfer --create-config
-
-# The config will be created at:
-# Windows: %USERPROFILE%\.config\image-transfer\config.yaml
-# Linux/macOS: ~/.config/image-transfer/config.yaml
-```
-
-Edit the configuration file for your setup. Example for Windows to Linux transfer:
-
-```yaml
-# ~/.config/image-transfer/config.yaml
-watch_path: C:/Users/Observer/data/images  # Windows path
+# Remote server configuration
 remote_host: freya
-remote_user: observer
-remote_base_path: /home/observer/data/images
-transfer_method: scp
-compression: false  # No compression for FITS files
+remote_user: winter
+remote_base_path: ~/data/images/NIGHT/spring
+
+# File patterns to watch (glob patterns)
+# Case-insensitive on Windows
 file_patterns:
   - "*.fits"
-  - "*.FIT"
-verify_transfer: true
-retry_attempts: 3
-retry_delay: 5
-```
+  - "*.FITS"
 
-## Running the Daemon
 
-### Test mode (manual run)
+# Logging configuration
+log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+log_directory: ~/logs
+log_file: image_transfer.log
 
-```bash
-# Run with default config
-image-transfer
 
-# Run with specific config
-image-transfer -c /path/to/config.yaml
+# File handling
+min_file_age_seconds: 2  # Wait for file to be stable before transfer
+exclude_patterns: []  # Patterns to exclude from transfer
+# exclude_patterns:
+#   - "*_temp.fits"
+#   - "test_*.fits"
 
-# Run with verbose logging
-image-transfer -v
-```
-
-## Service Installation & Management
-
-### Windows Service (User-Level Task Scheduler)
-
-Windows uses Task Scheduler at the user level - **no Administrator required!**
-
-#### Install service
-
-```batch
-# No admin needed - just run normally!
-image-transfer-service --install
-
-# Or if you want it to run even when logged out (requires password):
-image-transfer-service --install --with-password
-```
-
-#### Start/Stop service
-
-```batch
-# Simple batch commands (no admin needed)
-scripts\daemon.bat start
-scripts\daemon.bat stop
-scripts\daemon.bat status
-scripts\daemon.bat logs
-
-# Or use schtasks directly
-schtasks /run /tn ImageTransferDaemon    # Start
-schtasks /end /tn ImageTransferDaemon    # Stop
-schtasks /query /tn ImageTransferDaemon  # Status
-```
-
-#### Uninstall service
-
-```batch
-# No admin needed
-image-transfer-service --uninstall
-
-# Or
-scripts\daemon.bat uninstall
-```
-
-### Linux Service (systemd)
-
-#### Install service
-
-```bash
-# Install systemd service
-sudo image-transfer-service --install
-
-# Enable auto-start on boot
-sudo systemctl enable image-transfer.service
-```
-
-#### Start/Stop service
-
-```bash
-# Start service
-sudo systemctl start image-transfer.service
-
-# Stop service
-sudo systemctl stop image-transfer.service
-
-# Restart service
-sudo systemctl restart image-transfer.service
-
-# Check service status
-sudo systemctl status image-transfer.service
-
-# Enable auto-start on boot
-sudo systemctl enable image-transfer.service
-
-# Disable auto-start
-sudo systemctl disable image-transfer.service
-```
-
-#### Uninstall service
-
-```bash
-# Stop and disable service
-sudo systemctl stop image-transfer.service
-sudo systemctl disable image-transfer.service
-
-# Uninstall the service
-sudo image-transfer-service --uninstall
-```
-
-### macOS Service (launchd)
-
-#### Install service
-
-```bash
-# Install launchd service
-image-transfer-service --install
-```
-
-#### Start/Stop service
-
-```bash
-# Load/Start service
-launchctl load ~/Library/LaunchAgents/com.observatory.imagetransfer.plist
-
-# Unload/Stop service
-launchctl unload ~/Library/LaunchAgents/com.observatory.imagetransfer.plist
-
-# Check if service is running
-launchctl list | grep imagetransfer
-
-# Start service manually (if already loaded)
-launchctl start com.observatory.imagetransfer
-
-# Stop service manually
-launchctl stop com.observatory.imagetransfer
-```
-
-#### Uninstall service
-
-```bash
-# Uninstall the service
-image-transfer-service --uninstall
-```
-
-## Monitoring & Logs
-
-### Check transfer logs
-
-The daemon logs all transfers to `~/logs/image_transfer.log` with automatic rotation (10MB max, 5 backup files).
-
-#### Windows
-
-```powershell
-# View latest log entries
-Get-Content $env:USERPROFILE\logs\image_transfer.log -Tail 50
-
-# Monitor log in real-time
-Get-Content $env:USERPROFILE\logs\image_transfer.log -Wait
-
-# Search for successful transfers
-Select-String -Path $env:USERPROFILE\logs\image_transfer.log -Pattern "Successfully transferred"
-
-# Search for failures
-Select-String -Path $env:USERPROFILE\logs\image_transfer.log -Pattern "Failed to transfer"
-
-# Count total transfers today
-(Select-String -Path $env:USERPROFILE\logs\image_transfer.log -Pattern "Successfully transferred" | Where-Object {$_.Line -like "*$(Get-Date -Format yyyy-MM-dd)*"}).Count
-```
-
-#### Linux/macOS
-
-```bash
-# View latest log entries
-tail -n 50 ~/logs/image_transfer.log
-
-# Monitor log in real-time
-tail -f ~/logs/image_transfer.log
-
-# Search for successful transfers
-grep "Successfully transferred" ~/logs/image_transfer.log
-
-# Search for failures
-grep "Failed to transfer" ~/logs/image_transfer.log
-
-# Count total transfers today
-grep "Successfully transferred" ~/logs/image_transfer.log | grep "$(date +%Y-%m-%d)" | wc -l
-
-# Show transfer statistics
-echo "=== Transfer Statistics ==="
-echo "Total transfers: $(grep -c "Successfully transferred" ~/logs/image_transfer.log)"
-echo "Failed transfers: $(grep -c "Failed to transfer" ~/logs/image_transfer.log)"
-echo "Today's transfers: $(grep "Successfully transferred" ~/logs/image_transfer.log | grep "$(date +%Y-%m-%d)" | wc -l)"
-
-# List all transferred files from today
-grep "Successfully transferred" ~/logs/image_transfer.log | grep "$(date +%Y-%m-%d)" | awk '{print $NF}'
-```
-
-### Service-specific logs
-
-#### Windows logs
-
-```batch
-# Check task status
-schtasks /query /tn ImageTransferDaemon
-
-# View logs (simple)
-type %USERPROFILE%\logs\image_transfer.log
-
-# Or use the helper script
-scripts\daemon.bat logs
-
-# PowerShell (if you prefer)
-Get-Content $env:USERPROFILE\logs\image_transfer.log -Tail 50
-```
-
-#### Linux systemd logs
-
-```bash
-# View service logs
-sudo journalctl -u image-transfer.service
-
-# Follow service logs in real-time
-sudo journalctl -u image-transfer.service -f
-
-# View logs from today
-sudo journalctl -u image-transfer.service --since today
-
-# View logs from last hour
-sudo journalctl -u image-transfer.service --since "1 hour ago"
-```
-
-#### macOS Console logs
-
-```bash
-# View service logs
-log show --predicate 'process == "image-transfer"' --last 1h
-
-# Or use Console.app GUI
-# Open Console.app → Search for "image-transfer"
-```
-
-## Available Commands
-
-After installation, these commands are available:
-
-```bash
-# Show help
-image-transfer --help
-
-# Create default configuration
-image-transfer --create-config
-
-# Run with specific config
-image-transfer -c /path/to/config.yaml
-
-# Run with verbose output
-image-transfer -v
-
-# Install as system service
-image-transfer-service --install
-
-# Dry run (show what would be transferred without actually transferring)
-image-transfer --dry-run
-```
-
-## SSH Key Setup
-
-For remote transfers, set up SSH key authentication:
-
-### Windows
-
-```powershell
-# Generate SSH key
-ssh-keygen -t rsa -b 4096 -f $env:USERPROFILE\.ssh\id_rsa
-
-# Copy public key to remote server
-type $env:USERPROFILE\.ssh\id_rsa.pub | ssh user@remote-host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
-
-# Test connection
-ssh user@remote-host "echo 'Connection successful'"
-```
-
-### Linux/macOS
-
-```bash
-# Generate SSH key
-ssh-keygen -t rsa -b 4096
-
-# Copy public key to remote server
-ssh-copy-id user@remote-host
-
-# Test connection
-ssh user@remote-host "echo 'Connection successful'"
-```
-
-## Troubleshooting
-
-### Check if daemon is running
-
-```bash
-# Windows
-tasklist | findstr python
-
-# Linux
-ps aux | grep image-transfer
-
-# macOS
-ps aux | grep image-transfer
-```
-
-### Test SSH connection
-
-```bash
-# Windows PowerShell
-ssh user@remote-host "echo 'Connection successful'"
-
-# Linux/macOS
-ssh user@remote-host "echo 'Connection successful'"
-```
-
-### Common issues
-
-1. **SSH authentication fails**: Set up SSH key authentication (see SSH Key Setup section)
-
-2. **Permission denied on remote**: Check remote directory permissions
-   ```bash
-   ssh user@remote-host "ls -la /path/to/remote/directory"
-   ```
-
-3. **Windows: "Access Denied" during install**: 
-   - You don't need Administrator! Just run: `image-transfer-service --install`
-   - If you still get errors, try with password: `image-transfer-service --install --with-password`
-
-4. **Service won't start**: Check logs for errors
-   - Windows: `schtasks /query /tn ImageTransferDaemon /v`
-   - Linux: `sudo journalctl -u image-transfer.service`
-   - macOS: Console.app
-
-5. **Files not transferring**: Verify file patterns in config match your files
-   ```yaml
-   file_patterns:
-     - "*.fits"
-     - "*.FIT"
-     - "*.fit"
-   ```
-
-6. **Network timeouts**: Increase timeout in configuration
-   ```yaml
-   transfer_timeout_seconds: 300
-   ```
-
-## Development
-
-### Running tests
-
-```bash
-# Install dev dependencies first
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Run with coverage
-pytest --cov=image_transfer
-
-# Run specific test
-pytest tests/test_daemon.py
-```
-
-### Code formatting
-
-```bash
-# Format code with black
-black src/
-
-# Check code with ruff
-ruff check src/
-```
-
-### Building for distribution
-
-```bash
-# Install build tools
-pip install build
-
-# Build distribution packages
-python -m build
-
-# This creates wheels and source distributions in dist/
-```
-
-## Example Configurations
-
-### Basic Windows to Linux
-
-```yaml
-watch_path: C:/Users/Observer/data/images
-remote_host: freya
-remote_user: observer
-remote_base_path: /home/observer/data/images
-transfer_method: scp
-compression: false
-file_patterns:
-  - "*.fits"
-```
-
-### Linux to Linux with rsync
-
-```yaml
-watch_path: ~/telescope/images
-remote_host: processing-server.local
-remote_user: pipeline
-remote_base_path: /data/incoming/images
-transfer_method: rsync
-compression: false
 rsync_options:
-  - --archive
-  - --partial
-  - --progress
-file_patterns:
-  - "*.fits"
-  - "*.fit"
+  - -avP
+  - --mkpath # Create destination directories as needed
+  - --ignore-existing # Skip files that already exist on remote
+  # - --remove-source-files # Uncomment to delete local files after transfer
 ```
 
-### Local transfer (same machine)
+### Running the Transfer
 
-```yaml
-watch_path: ~/camera/raw
-remote_host: localhost
-remote_user: ignored
-remote_base_path: ~/processing/inbox
-transfer_method: local
-file_patterns:
-  - "*.fits"
+Run the image transfer using the default configuration with:
+```bash:
+image-transfer
 ```
 
-## License
+or, if you want to point to a specific configuration file:
 
-MIT
+```bash:
+image-transfer -c /abs/path/to/config.yaml
+```
+
+### Using Overrides
+Override options can be passed to image-transfer. Some examples below:
+
+```bash:
+# Dry run only
+image-transfer -c config/config.yaml --dry-run
+
+# Force a specific night label
+image-transfer --night 20251007
+
+# Override remote or watch path without editing YAML
+image-transfer --remote-host freya --remote-user winter \
+               --remote-base-path '~/data/images/NIGHT/spring' \
+               --watch-path '/mnt/c/Users/oir-user/data/images/NIGHT/spring'
+
+# Add extra rsync flags (repeatable)
+image-transfer --rsync-option='--partial' --rsync-option='--progress'
+
+```
+
+### Calling the Python Module Directly
+Using the command line interface (cli) call (`image-transfer`) relies on having the correct python environment active, eg having the proper conda environment activated. This won't work when trying to call the module from a cron job which won't use the right python by default. The options are to either:
+1. Call the correct python using its full path and call:
+```bash:
+`/abs/path/to/python -m image-transfer.cli
+```
+
+
+2. Activate the conda environment and use the cli in one call:
+```bash:
+source /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/etc/profile.d/conda.sh && conda activate /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda && image-transfer
+```
+
+## Setting up a cron job
+Example: run the image transfer every minute:
+
+
+```bash:
+* * * * * /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli
+```

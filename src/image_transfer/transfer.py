@@ -1,348 +1,319 @@
-"""Main transfer module for image synchronization."""
+from __future__ import annotations
 
+import fnmatch
 import logging
-import logging.handlers
 import os
-import shutil
+import shlex
 import subprocess
 import sys
-import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Iterable, List, Sequence
 
-logger = logging.getLogger(__name__)
+import pytz
+import yaml
+
+# ---------- Night helper ----------
 
 
-class ImageTransfer:
-    """Handle image file transfers based on configuration."""
-
-    def __init__(self, config):
-        """Initialize transfer handler."""
-        self.config = config
-        self.transferred_files: Set[Path] = set()
-        self._setup_logging()
-        self._detect_platform()
-
-    def _detect_platform(self):
-        """Detect platform and available transfer tools."""
-        self.is_windows = sys.platform.startswith("win")
-        self.has_rsync = self._check_command("rsync")
-        self.has_ssh = self._check_command("ssh")
-
-        if self.is_windows and not self.has_ssh:
-            logger.warning("SSH not found. Please install OpenSSH Client or Git Bash")
-
-    def _check_command(self, cmd: str) -> bool:
-        """Check if a command is available."""
-        try:
-            result = subprocess.run(
-                ["where" if sys.platform.startswith("win") else "which", cmd],
-                capture_output=True,
-                text=True,
-            )
-            return result.returncode == 0
-        except:
-            return False
-
-    def _setup_logging(self):
-        """Configure logging based on config."""
-        # Always use ~/logs, not a path in the repo
-        log_dir = Path.home() / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Use a single log file with rotation
-        log_file = log_dir / "image_transfer.log"
-
-        # Configure rotating file handler
-        handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=self.config.get("log_rotation_size_mb", 10) * 1024 * 1024,
-            backupCount=self.config.get("log_backup_count", 5),
-        )
-
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-        handler.setFormatter(formatter)
-
-        # Clear any existing handlers and add our handler
-        logger.handlers.clear()
-        logger.addHandler(handler)
-
-        # Also log to console when running interactively
-        if sys.stdout.isatty():
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-
-        logger.setLevel(getattr(logging, self.config.get("log_level", "INFO")))
-
-        # Log startup
-        logger.info("=" * 60)
-        logger.info(f"Image Transfer starting - {datetime.now()}")
-        logger.info(f"Watch path: {self.config['watch_path']}")
-        logger.info(
-            f"Remote: {self.config['remote_user']}@{self.config['remote_host']}:{self.config['remote_base_path']}"
-        )
-
-    def find_new_files(self) -> List[Path]:
-        """Find new files matching configured patterns."""
-        watch_path = Path(self.config["watch_path"])
-
-        if not watch_path.exists():
-            logger.error(f"Watch path does not exist: {watch_path}")
-            return []
-
-        new_files = []
-        patterns = self.config.get("file_patterns", ["*.fits"])
-        exclude_patterns = self.config.get("exclude_patterns", [])
-        min_age = self.config.get("min_file_age_seconds", 2)
-        cutoff_time = datetime.now() - timedelta(seconds=min_age)
-
-        for pattern in patterns:
-            for file_path in watch_path.rglob(pattern):
-                # Skip if already transferred
-                if file_path in self.transferred_files:
-                    continue
-
-                # Skip excluded patterns
-                if any(file_path.match(exc) for exc in exclude_patterns):
-                    continue
-
-                # Check file age (ensure write is complete)
-                try:
-                    mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                    if mtime > cutoff_time:
-                        continue
-                except (OSError, IOError):
-                    continue
-
-                new_files.append(file_path)
-
-        return new_files
-
-    def build_remote_path(self, local_file: Path) -> str:
-        """Build the remote destination path."""
-        watch_path = Path(self.config["watch_path"])
-        relative_path = local_file.relative_to(watch_path)
-
-        # Extract date folder if present (e.g., 20251006)
-        parts = relative_path.parts
-        remote_base = self.config["remote_base_path"]
-
-        # Add camera name if configured
-        camera_name = self.config.get("camera_name")
-
-        if camera_name and parts:
-            # Check if first part looks like a date folder
-            if len(parts[0]) == 8 and parts[0].isdigit():
-                # Insert camera name after date folder
-                remote_parts = [remote_base, parts[0], camera_name] + list(parts[1:])
-            else:
-                # Add camera name at beginning
-                remote_parts = [remote_base, camera_name] + list(parts)
+def tonight_local(
+    timestamp: str | float = "now", tz: str = "America/Los_Angeles"
+) -> str:
+    tzinfo = pytz.timezone(tz)
+    if timestamp == "now":
+        now_local = datetime.now(tzinfo)
+    else:
+        if isinstance(timestamp, (int, float)):
+            now_local = datetime.fromtimestamp(timestamp, tzinfo)
         else:
-            remote_parts = [remote_base] + list(parts)
+            try:
+                now_local = datetime.fromtimestamp(float(timestamp), tzinfo)
+            except Exception:
+                now_local = datetime.now(tzinfo)
 
-        # Use forward slashes for remote path (even from Windows)
-        return "/".join(str(p) for p in remote_parts)
+    if 0 <= now_local.hour < 8:
+        now_local = now_local - timedelta(days=1)
 
-    def transfer_file(self, local_file: Path) -> bool:
-        """Transfer a single file to remote destination."""
-        remote_path = self.build_remote_path(local_file)
-        remote_host = self.config["remote_host"]
-        remote_user = self.config["remote_user"]
+    return now_local.strftime("%Y%m%d")
 
-        # Handle local transfers
-        if remote_host in ["localhost", "127.0.0.1", "::1"]:
-            return self._local_transfer(local_file, remote_path)
 
-        # Determine transfer method
-        method = self.config.get("transfer_method", "auto")
+# ---------- Config model ----------
 
-        if method == "auto":
-            if self.has_rsync:
-                method = "rsync"
-            elif self.has_ssh:
-                method = "scp"
-            else:
-                logger.error("No suitable transfer method available")
-                return False
 
-        # Create remote directory
-        remote_dir = "/".join(remote_path.split("/")[:-1])
-        if not self._create_remote_directory(remote_user, remote_host, remote_dir):
-            return False
+@dataclass
+class Config:
+    watch_path: Path
+    remote_host: str
+    remote_user: str
+    remote_base_path: str
+    file_patterns: List[str]
+    log_level: str
+    log_directory: Path
+    log_file: str
+    min_file_age_seconds: int
+    exclude_patterns: List[str]
+    rsync_options: List[str]
+    log_max_bytes: int = 50 * 1024 * 1024  # 50 MB
+    log_backup_count: int = 5
 
-        # Transfer file
-        success = False
-        attempts = self.config.get("retry_attempts", 3)
-        delay = self.config.get("retry_delay", 5)
+    @staticmethod
+    def from_yaml(path: Path) -> "Config":
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
 
-        for attempt in range(attempts):
-            if attempt > 0:
-                logger.info(f"Retry attempt {attempt + 1}/{attempts}")
-                time.sleep(delay)
-
-            if method == "rsync":
-                success = self._rsync_transfer(
-                    local_file, remote_user, remote_host, remote_path
-                )
-            elif method == "scp":
-                success = self._scp_transfer(
-                    local_file, remote_user, remote_host, remote_path
-                )
-
-            if success:
-                break
-
-        if success and self.config.get("verify_transfer", True):
-            success = self._verify_transfer(
-                local_file, remote_user, remote_host, remote_path
+        file_patterns = data.get("file_patterns") or ["*.fits", "*.FITS"]
+        exclude_patterns = data.get("exclude_patterns") or []
+        rsync_opts = [
+            str(opt)
+            for opt in (
+                data.get("rsync_options") or ["-avP", "--mkpath", "--ignore-existing"]
             )
-
-        if success:
-            self.transferred_files.add(local_file)
-            logger.info(
-                f"Successfully transferred: {local_file} -> {remote_host}:{remote_path}"
-            )
-        else:
-            logger.error(f"Failed to transfer: {local_file}")
-
-        return success
-
-    def _local_transfer(self, local_file: Path, remote_path: str) -> bool:
-        """Handle local file transfers."""
-        dest_path = Path(remote_path)
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            shutil.copy2(local_file, dest_path)
-            return True
-        except Exception as e:
-            logger.error(f"Local transfer failed: {e}")
-            return False
-
-    def _create_remote_directory(self, user: str, host: str, directory: str) -> bool:
-        """Create directory on remote host."""
-        cmd = ["ssh", f"{user}@{host}", f"mkdir -p {directory}"]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.config.get("transfer_timeout_seconds", 300),
-            )
-            return result.returncode == 0
-        except Exception as e:
-            logger.error(f"Failed to create remote directory: {e}")
-            return False
-
-    def _rsync_transfer(
-        self, local_file: Path, user: str, host: str, remote_path: str
-    ) -> bool:
-        """Transfer file using rsync."""
-        cmd = ["rsync", "-av"]
-
-        if self.config.get("compression", False):
-            cmd.append("-z")
-
-        # Add Windows-specific options
-        if self.is_windows:
-            cmd.extend(["--no-perms", "--no-owner", "--no-group"])
-
-        cmd.extend([str(local_file), f"{user}@{host}:{remote_path}"])
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.config.get("transfer_timeout_seconds", 300),
-            )
-            if result.returncode != 0:
-                logger.debug(f"Rsync stderr: {result.stderr}")
-            return result.returncode == 0
-        except Exception as e:
-            logger.error(f"Rsync transfer failed: {e}")
-            return False
-
-    def _scp_transfer(
-        self, local_file: Path, user: str, host: str, remote_path: str
-    ) -> bool:
-        """Transfer file using scp."""
-        cmd = ["scp"]
-
-        if self.config.get("compression", False):
-            cmd.append("-C")
-
-        cmd.extend([str(local_file), f"{user}@{host}:{remote_path}"])
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.config.get("transfer_timeout_seconds", 300),
-            )
-            if result.returncode != 0:
-                logger.debug(f"SCP stderr: {result.stderr}")
-            return result.returncode == 0
-        except Exception as e:
-            logger.error(f"SCP transfer failed: {e}")
-            return False
-
-    def _verify_transfer(
-        self, local_file: Path, user: str, host: str, remote_path: str
-    ) -> bool:
-        """Verify file was transferred correctly."""
-        local_size = local_file.stat().st_size
-
-        cmd = [
-            "ssh",
-            f"{user}@{host}",
-            f"stat -c %s {remote_path} 2>/dev/null || stat -f %z {remote_path} 2>/dev/null",
         ]
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
-            if result.returncode == 0:
-                remote_size = int(result.stdout.strip())
-                if local_size == remote_size:
-                    return True
-                else:
-                    logger.error(
-                        f"Size mismatch: local={local_size}, remote={remote_size}"
-                    )
-                    return False
-        except Exception as e:
-            logger.error(f"Verification failed: {e}")
-
-        return False
-
-    def run(self):
-        """Run a single transfer cycle."""
-        logger.info("Starting transfer cycle")
-
-        new_files = self.find_new_files()
-
-        if not new_files:
-            logger.debug("No new files to transfer")
-            return
-
-        logger.info(f"Found {len(new_files)} new files to transfer")
-
-        # Transfer files (respecting parallel transfer limit)
-        # For simplicity, we'll do sequential transfers in this version
-        # For parallel transfers, you'd use concurrent.futures or asyncio
-
-        success_count = 0
-        for file_path in new_files:
-            if self.transfer_file(file_path):
-                success_count += 1
-
-        logger.info(
-            f"Transfer cycle complete: {success_count}/{len(new_files)} successful"
+        return Config(
+            watch_path=Path(os.path.expanduser(data["watch_path"])),
+            remote_host=str(data["remote_host"]),
+            remote_user=str(data["remote_user"]),
+            remote_base_path=str(data["remote_base_path"]),
+            file_patterns=[str(p) for p in file_patterns],
+            log_level=str(data.get("log_level", "INFO")).upper(),
+            log_directory=Path(os.path.expanduser(data.get("log_directory", "~/logs"))),
+            log_file=str(data.get("log_file", "image_transfer.log")),
+            min_file_age_seconds=int(data.get("min_file_age_seconds", 2)),
+            exclude_patterns=[str(p) for p in exclude_patterns],
+            rsync_options=rsync_opts,
+            log_max_bytes=int(data.get("log_max_bytes", 50 * 1024 * 1024)),
+            log_backup_count=int(data.get("log_backup_count", 5)),
         )
+
+
+# ---------- Utilities ----------
+
+
+def find_project_root(start: Path | None = None) -> Path | None:
+    """Walk up from start (or CWD) to find a directory containing pyproject.toml or .git."""
+    cur = (start or Path.cwd()).resolve()
+    for parent in [cur, *cur.parents]:
+        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
+            return parent
+    return None
+
+
+def default_config_path() -> Path | None:
+    # Order: ENV → project_root/config/config.yaml → None
+    env = os.environ.get("IMAGE_TRANSFER_CONFIG")
+    if env:
+        return Path(os.path.expanduser(env))
+    root = find_project_root()
+    if root:
+        cand = root / "config" / "config.yaml"
+        if cand.exists():
+            return cand
+    return None
+
+
+def replace_night_placeholder(p: str | Path, night: str) -> str:
+    return str(p).replace("NIGHT", night)
+
+
+def list_candidate_files(
+    root: Path,
+    include_patterns: Sequence[str],
+    exclude_patterns: Sequence[str],
+) -> Iterable[Path]:
+    inc_lower = [pat.lower() for pat in include_patterns]
+    exc_lower = [pat.lower() for pat in exclude_patterns]
+
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        name_lower = path.name.lower()
+        if inc_lower and not any(
+            fnmatch.fnmatchcase(name_lower, pat) for pat in inc_lower
+        ):
+            continue
+        if exc_lower and any(fnmatch.fnmatchcase(name_lower, pat) for pat in exc_lower):
+            continue
+        yield path
+
+
+def is_stable_file(path: Path, min_age_seconds: int) -> bool:
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    age = datetime.now().timestamp() - mtime
+    return age >= min_age_seconds
+
+
+def ensure_logging(
+    log_dir: Path,
+    log_file: str,
+    level: str = "INFO",
+    max_bytes: int = 50 * 1024 * 1024,
+    backup_count: int = 5,
+) -> None:
+    from logging.handlers import RotatingFileHandler
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logfile = log_dir / log_file
+
+    logger = logging.getLogger()  # root logger
+    logger.setLevel(getattr(logging, level, logging.INFO))
+
+    # Make idempotent: clear existing handlers so we don’t double-log
+    if logger.handlers:
+        logger.handlers.clear()
+
+    file_handler = RotatingFileHandler(
+        logfile, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+    )
+    stream_handler = logging.StreamHandler(sys.stdout)
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+
+
+def check_rsync_available() -> None:
+    from shutil import which
+
+    if which("rsync") is None:
+        raise RuntimeError(
+            "rsync not found in PATH. Install it (e.g., `sudo apt install rsync`)."
+        )
+
+
+def build_rsync_cmd(
+    src_file: Path,
+    remote_user: str,
+    remote_host: str,
+    remote_dir: str,
+    rsync_options: Sequence[str],
+) -> list[str]:
+    remote_spec = f"{remote_user}@{remote_host}:{remote_dir}"
+    return ["rsync", *rsync_options, str(src_file), remote_spec]
+
+
+def run_rsync_cmd(cmd: list[str]) -> int:
+    logging.debug("Running: %s", " ".join(shlex.quote(c) for c in cmd))
+    proc = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    if proc.returncode == 0:
+        if proc.stdout.strip():
+            logging.debug("rsync stdout: %s", proc.stdout.strip())
+    else:
+        logging.error(
+            "rsync failed (%d)\nSTDOUT:\n%s\nSTDERR:\n%s",
+            proc.returncode,
+            proc.stdout.strip(),
+            proc.stderr.strip(),
+        )
+    return proc.returncode
+
+
+def transfer_once(
+    cfg: Config,
+    tz: str = "America/Los_Angeles",
+    night_override: str | None = None,
+    dry_run: bool = False,
+    override_watch: Path | None = None,
+    override_remote_host: str | None = None,
+    override_remote_user: str | None = None,
+    override_remote_base: str | None = None,
+    add_rsync_options: Sequence[str] | None = None,
+) -> int:
+    night = night_override or tonight_local("now", tz=tz)
+
+    watch_path_str = replace_night_placeholder(override_watch or cfg.watch_path, night)
+    remote_base_str = replace_night_placeholder(
+        override_remote_base or cfg.remote_base_path, night
+    )
+    watch_root = Path(os.path.expanduser(str(watch_path_str)))
+
+    ensure_logging(
+        cfg.log_directory,
+        cfg.log_file,
+        cfg.log_level,
+        max_bytes=cfg.log_max_bytes,
+        backup_count=cfg.log_backup_count,
+    )
+
+    try:
+        check_rsync_available()
+    except RuntimeError as e:
+        logging.critical(str(e))
+        return 2
+
+    logging.info("Night = %s", night)
+    logging.info("Local watch path: %s", watch_root)
+    logging.info("Remote base path: %s", remote_base_str)
+
+    remote_host = override_remote_host or cfg.remote_host
+    remote_user = override_remote_user or cfg.remote_user
+    logging.info("Remote: %s@%s", remote_user, remote_host)
+
+    if not watch_root.exists():
+        logging.error("Watch path does not exist: %s", watch_root)
+        return 1
+
+    candidates = list(
+        list_candidate_files(watch_root, cfg.file_patterns, cfg.exclude_patterns)
+    )
+    if not candidates:
+        logging.info("No files found matching patterns.")
+        return 0
+
+    stable_files = [
+        p for p in candidates if is_stable_file(p, cfg.min_file_age_seconds)
+    ]
+    skipped = len(candidates) - len(stable_files)
+    if skipped:
+        logging.info("Skipped %d file(s) not yet stable.", skipped)
+
+    if not stable_files:
+        logging.info("No stable files to transfer.")
+        return 0
+
+    rsync_opts = list(cfg.rsync_options)
+    if dry_run and "--dry-run" not in rsync_opts and "-n" not in rsync_opts:
+        rsync_opts.append("--dry-run")
+    if add_rsync_options:
+        for opt in add_rsync_options:
+            if opt not in rsync_opts:
+                rsync_opts.append(opt)
+
+    failures = 0
+    for src in sorted(stable_files):
+        rel = src.relative_to(watch_root)
+        remote_dir = (
+            f"{remote_base_str}/{rel.parent.as_posix()}"
+            if rel.parent.as_posix() != "."
+            else remote_base_str
+        )
+        cmd = build_rsync_cmd(
+            src_file=src,
+            remote_user=remote_user,
+            remote_host=remote_host,
+            remote_dir=remote_dir,
+            rsync_options=rsync_opts,
+        )
+        rc = run_rsync_cmd(cmd)
+        if rc != 0:
+            failures += 1
+        else:
+            logging.info("Transferred: %s", src)
+
+    if failures:
+        logging.error(
+            "Completed with %d failure(s) out of %d files.", failures, len(stable_files)
+        )
+        return 3
+
+    logging.info("Transfer complete. %d file(s) transferred.", len(stable_files))
+    return 0

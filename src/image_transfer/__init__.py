@@ -1,7 +1,8 @@
-"""Image Transfer - Cross-platform file synchronization system."""
+from importlib.metadata import PackageNotFoundError, version
 
-from .config import Config
-from .transfer import ImageTransfer
+__all__ = ["__version__"]
 
-__version__ = "0.1.0"
-__all__ = ["Config", "ImageTransfer"]
+try:
+    __version__ = version("image-transfer")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
