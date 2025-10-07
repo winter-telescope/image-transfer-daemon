@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -192,33 +193,43 @@ def build_rsync_cmd(
     return ["rsync", *rsync_options, str(src_file), remote_spec]
 
 
-def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, str]:
-    """
-    Run rsync and detect whether the file was actually transferred.
+ITEMIZED_RE = re.compile(r"^(?P<icode>[<>ch\.][^\s]*)\s+(?P<name>.+)$")
 
-    Returns: (returncode, copied, raw_output)
-      - copied=True if rsync itemized a file transfer (line starts with '>f')
+
+def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
     """
-    logging.debug("Running: %s", " ".join(shlex.quote(c) for c in cmd))
+    Run rsync and detect whether at least one file was actually transferred.
+
+    Returns: (returncode, copied_any, itemized_lines)
+      - copied_any=True if any itemized line indicates a receiver-side file write (>f*)
+      - itemized_lines: all parsed %i/%n lines for logging/debug
+    """
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
-    out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
 
-    copied = False
-    # Parse itemized lines (requires -i). '>f' = a file was written on receiver.
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith(">f"):  # e.g. ">f.st...... some/file.fits"
-            copied = True
-            break
+    # Collect both streams; with -P progress, rsync writes to stderr
+    lines = []
+    for stream in (proc.stdout or "").splitlines() + (proc.stderr or "").splitlines():
+        m = ITEMIZED_RE.match(stream.strip())
+        if m:
+            lines.append(stream.strip())
+
+    copied_any = any(line.startswith(">f") for line in lines)
 
     if proc.returncode != 0:
-        logging.error("rsync failed (%d)\n%s", proc.returncode, out)
+        logging.error(
+            "rsync failed (%d)\nSTDOUT:\n%s\nSTDERR:\n%s",
+            proc.returncode,
+            (proc.stdout or "").strip(),
+            (proc.stderr or "").strip(),
+        )
     else:
-        logging.debug("rsync output:\n%s", out.strip())
+        # Keep debug noisy; normal info logs below
+        if lines:
+            logging.debug("rsync itemized:\n%s", "\n".join(lines))
 
-    return proc.returncode, copied, out
+    return proc.returncode, copied_any, lines
 
 
 def transfer_once(
@@ -307,7 +318,7 @@ def transfer_once(
             remote_dir=remote_dir,
             rsync_options=rsync_opts,
         )
-        rc, copied, _ = run_rsync_cmd(cmd)
+        rc, copied, lines = run_rsync_cmd(cmd)
         if rc != 0:
             failures += 1
         elif copied:

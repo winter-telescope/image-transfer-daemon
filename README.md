@@ -94,7 +94,7 @@ Using the command line interface (cli) call (`image-transfer`) relies on having 
 Find the full path to the environment’s Python and call the CLI as a module:
 
 ```bash:
-* * * * * /home/oir-user/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml
+/home/oir-user/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml
 ```
 
 This guarantees you’re using the Python from your .conda env, without needing to activate anything.
@@ -103,7 +103,7 @@ This guarantees you’re using the Python from your .conda env, without needing 
 
 If you want to activate the environment first (useful if your CLI relies on conda activate to set variables):
 ```bash:
-* * * * * /bin/bash -c "source /home/oir-user/GIT/image-transfer-daemon/.conda/etc/profile.d/conda.sh && conda activate /home/oir-user/GIT/image-transfer-daemon/.conda && image-transfer -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml"
+source /home/oir-user/GIT/image-transfer-daemon/.conda/etc/profile.d/conda.sh && conda activate /home/oir-user/GIT/image-transfer-daemon/.conda && image-transfer -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml
 ```
 
 This runs a login shell, sources conda’s activation script, activates your .conda environment, and then calls the image-transfer CLI entrypoint.
@@ -112,9 +112,10 @@ This runs a login shell, sources conda’s activation script, activates your .co
 Example: run the image transfer every minute:
 
 ```bash:
-* * * * * /mnt/c/Users/Desktop/GIT/image-transfer-daemon/.conda/python.exe -m image_transfer.cli
+* * * * * /home/oir-user/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli
 ```
 
+### Windows + Cron Job Execution in WSL
 On windows + wsl, to ensure that wsl+cron runs always even on reboot:
 
 You need to have the cron service running:
@@ -129,4 +130,47 @@ To have it run automatically after reboot, set up a Windows Task Scheduler entry
 wsl.exe -d Ubuntu -u root service cron start
 ```
 
+Steps for setting up the task:
+1. open **Task Scheduler** in windows
+2. Create a new **Task** (not a basic task)
+3. **General Tab:**
+  - Name: `WSL Cron Startup`
+  - Description: Start up an ubuntu terminal with WSL running in the background always to ensure that cronjobs defined in linux run all the time whether the user is logged in or not.
+  - Select "Run whether user is logged on or not"
+  - Select "Run with highest privileges"
+4. **Triggers tab:**
+  - New trigger --> "At startup"
+5. **Actions tab:**
+  - New action --> "Start a program"
+  - Program/script: `wsl.exe`
+  - Add arguments: `-d Ubuntu -u root service cron start`
+6. **Conditions tab:**
+  - Uncheck “Start the task only if the computer is on AC power” if you want it even on battery.
+7. **Settings tab:**
+  - Enable “If the task fails, restart every …” for robustness, and select 5 minutes
+  - Uncheck "Stop the task if it runs longer than..." box
 
+
+**Note:**
+WSL will terminate when idle unless something is running. The cron daemon counts as “something running,” so as long as you start it this way, WSL will stay up.
+
+If you ever want to ensure WSL never shuts down, you can run:
+```bash:
+wsl --set-default-version 2
+wsl --install -d Ubuntu
+```
+and then start a lightweight background process like tail -f /dev/null via Task Scheduler. But usually service cron start is enough.
+
+
+** Test the setup **
+
+Reboot Windows.
+
+After logging in, check from Windows PowerShell:
+```bash:
+wsl -d Ubuntu -u root pgrep cron
+```
+
+You should see cron’s PID.
+
+Check your cron log (e.g., /var/log/syslog in Ubuntu) to confirm it’s running jobs.
