@@ -346,6 +346,9 @@ def transfer_once(
             remote_dir=remote_dir,
             rsync_options=rsync_opts,
         )
+
+        logging.info(f"running this command: {cmd}")
+
         rc, copied, lines = run_rsync_cmd(cmd)
         if rc != 0:
             failures += 1
