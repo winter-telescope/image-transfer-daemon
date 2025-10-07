@@ -88,22 +88,31 @@ image-transfer --rsync-option='--partial' --rsync-option='--progress'
 
 ### Calling the Python Module Directly
 Using the command line interface (cli) call (`image-transfer`) relies on having the correct python environment active, eg having the proper conda environment activated. This won't work when trying to call the module from a cron job which won't use the right python by default. The options are to either:
-1. Call the correct python using its full path and call:
+
+**Option A: Call the Python binary directly (recommended)**
+
+Find the full path to the environment’s Python and call the CLI as a module:
+
 ```bash:
-`/abs/path/to/python -m image-transfer.cli
+* * * * * /home/oir-user/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml
 ```
 
+This guarantees you’re using the Python from your .conda env, without needing to activate anything.
 
-2. Activate the conda environment and use the cli in one call:
+**Option B: Activate the conda env inside bash**
+
+If you want to activate the environment first (useful if your CLI relies on conda activate to set variables):
 ```bash:
-source /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/etc/profile.d/conda.sh && conda activate /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda && image-transfer
+* * * * * /bin/bash -c "source /home/oir-user/GIT/image-transfer-daemon/.conda/etc/profile.d/conda.sh && conda activate /home/oir-user/GIT/image-transfer-daemon/.conda && image-transfer -c /home/oir-user/GIT/image-transfer-daemon/config/config.yaml"
 ```
+
+This runs a login shell, sources conda’s activation script, activates your .conda environment, and then calls the image-transfer CLI entrypoint.
 
 ## Setting up a cron job
 Example: run the image transfer every minute:
 
 ```bash:
-* * * * * /mnt/c/Users/oir-user/Desktop/GIT/image-transfer-daemon/.conda/bin/python -m image_transfer.cli
+* * * * * /mnt/c/Users/Desktop/GIT/image-transfer-daemon/.conda/python.exe -m image_transfer.cli
 ```
 
 On windows + wsl, to ensure that wsl+cron runs always even on reboot:

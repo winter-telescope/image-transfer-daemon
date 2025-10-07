@@ -101,16 +101,9 @@ def find_project_root(start: Path | None = None) -> Path | None:
 
 
 def default_config_path() -> Path | None:
-    # Order: ENV → project_root/config/config.yaml → None
-    env = os.environ.get("IMAGE_TRANSFER_CONFIG")
-    if env:
-        return Path(os.path.expanduser(env))
-    root = find_project_root()
-    if root:
-        cand = root / "config" / "config.yaml"
-        if cand.exists():
-            return cand
-    return None
+    from image_transfer.paths import CONFIG_DIR
+
+    return Path(CONFIG_DIR, "config.yaml")
 
 
 def replace_night_placeholder(p: str | Path, night: str) -> str:
