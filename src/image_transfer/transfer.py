@@ -193,6 +193,31 @@ def build_rsync_cmd(
     return ["rsync", *rsync_options, str(src_file), remote_spec]
 
 
+def sanitize_rsync_options(opts: list[str]) -> list[str]:
+    out: list[str] = []
+    i = 0
+    while i < len(opts):
+        o = opts[i]
+        if o == "--out-format" and i + 1 < len(opts):
+            # handle ["--out-format", "%i %n"]
+            out.append(f"--out-format={opts[i+1]}")
+            i += 2
+            continue
+        if o.startswith("--out-format="):
+            # good as-is (but might be split later)
+            out.append(o)
+            i += 1
+            continue
+        if o.startswith("--out-format=%") and i + 1 < len(opts) and "%n" in opts[i + 1]:
+            # handle ["--out-format=%i", "%n"]
+            out.append(f"{o} {opts[i+1]}")
+            i += 2
+            continue
+        out.append(o)
+        i += 1
+    return out
+
+
 ITEMIZED_RE = re.compile(r"^(?P<icode>[<>ch\.][^\s]*)\s+(?P<name>.+)$")
 
 
@@ -311,6 +336,9 @@ def transfer_once(
             if rel.parent.as_posix() != "."
             else remote_base_str
         )
+
+        rsync_opts = sanitize_rsync_options(list(cfg.rsync_options))
+
         cmd = build_rsync_cmd(
             src_file=src,
             remote_user=remote_user,

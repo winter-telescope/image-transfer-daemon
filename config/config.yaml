@@ -35,6 +35,6 @@ exclude_patterns: []  # Patterns to exclude from transfer
 rsync_options:
   - -avPi
   - --mkpath # Create destination directories as needed
-  - --out-format=%i %n
+  - "--out-format=%i %n"
   # - --remove-source-files # Uncomment to delete local files after transfer
   
