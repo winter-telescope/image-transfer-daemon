@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import fnmatch
@@ -9,19 +10,32 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from distutils import cmd
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
 import pytz
 import yaml
 
-# ---------- Night helper ----------
+# -------------------------- Constants --------------------------
+
+# Non-negotiable rsync flags (pinned in code)
+REQUIRED_RSYNC_OPTS: list[str] = [
+    "-aP",  # archive + progress (drop 'v' to reduce noise; keep -P so progress goes to stderr)
+    "--mkpath",  # create destination dirs (requires newer rsync)
+    "--out-format=%i %n",  # machine-parsable itemized output for robust copy/skip detection
+]
+
+
+# -------------------------- Night helper --------------------------
 
 
 def tonight_local(
     timestamp: str | float = "now", tz: str = "America/Los_Angeles"
 ) -> str:
+    """
+    Define the "night" as 08:00 local time to 07:59 next day (local).
+    Returns YYYYMMDD string for the "night" date.
+    """
     tzinfo = pytz.timezone(tz)
     if timestamp == "now":
         now_local = datetime.now(tzinfo)
@@ -40,7 +54,7 @@ def tonight_local(
     return now_local.strftime("%Y%m%d")
 
 
-# ---------- Config model ----------
+# -------------------------- Config model --------------------------
 
 
 @dataclass
@@ -55,7 +69,6 @@ class Config:
     log_file: str
     min_file_age_seconds: int
     exclude_patterns: List[str]
-    rsync_options: List[str]
     log_max_bytes: int = 50 * 1024 * 1024  # 50 MB
     log_backup_count: int = 5
 
@@ -64,14 +77,14 @@ class Config:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
+        # Warn (but ignore) if legacy rsync_options is present
+        if "rsync_options" in data:
+            logging.warning(
+                "Ignoring 'rsync_options' in config; rsync flags are pinned in code."
+            )
+
         file_patterns = data.get("file_patterns") or ["*.fits", "*.FITS"]
         exclude_patterns = data.get("exclude_patterns") or []
-        rsync_opts = [
-            str(opt)
-            for opt in (
-                data.get("rsync_options") or ["-avP", "--mkpath", "--ignore-existing"]
-            )
-        ]
 
         return Config(
             watch_path=Path(os.path.expanduser(data["watch_path"])),
@@ -84,28 +97,24 @@ class Config:
             log_file=str(data.get("log_file", "image_transfer.log")),
             min_file_age_seconds=int(data.get("min_file_age_seconds", 2)),
             exclude_patterns=[str(p) for p in exclude_patterns],
-            rsync_options=rsync_opts,
             log_max_bytes=int(data.get("log_max_bytes", 50 * 1024 * 1024)),
             log_backup_count=int(data.get("log_backup_count", 5)),
         )
 
 
-# ---------- Utilities ----------
-
-
-def find_project_root(start: Path | None = None) -> Path | None:
-    """Walk up from start (or CWD) to find a directory containing pyproject.toml or .git."""
-    cur = (start or Path.cwd()).resolve()
-    for parent in [cur, *cur.parents]:
-        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
-            return parent
-    return None
+# -------------------------- Utilities --------------------------
 
 
 def default_config_path() -> Path | None:
-    from image_transfer.paths import CONFIG_DIR
+    """Return default config path inside the installed package's config dir."""
+    try:
+        from image_transfer.paths import (
+            CONFIG_DIR,  # provided elsewhere in your package
+        )
 
-    return Path(CONFIG_DIR, "config.yaml")
+        return Path(CONFIG_DIR, "config.yaml")
+    except Exception:
+        return None
 
 
 def replace_night_placeholder(p: str | Path, night: str) -> str:
@@ -117,6 +126,7 @@ def list_candidate_files(
     include_patterns: Sequence[str],
     exclude_patterns: Sequence[str],
 ) -> Iterable[Path]:
+    """Yield files under root that match include_patterns and not exclude_patterns (case-insensitive)."""
     inc_lower = [pat.lower() for pat in include_patterns]
     exc_lower = [pat.lower() for pat in exclude_patterns]
 
@@ -134,6 +144,7 @@ def list_candidate_files(
 
 
 def is_stable_file(path: Path, min_age_seconds: int) -> bool:
+    """Return True if file mtime is at least min_age_seconds in the past."""
     try:
         mtime = path.stat().st_mtime
     except FileNotFoundError:
@@ -149,6 +160,7 @@ def ensure_logging(
     max_bytes: int = 50 * 1024 * 1024,
     backup_count: int = 5,
 ) -> None:
+    """Set up rotating logging to file + stream."""
     from logging.handlers import RotatingFileHandler
 
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -195,22 +207,29 @@ def build_rsync_cmd(
 
 
 def sanitize_rsync_options(opts: list[str]) -> list[str]:
+    """
+    Glue split --out-format arguments and return a sanitized list.
+    e.g. ["--out-format", "%i %n"] -> ["--out-format=%i %n"]
+         ["--out-format=%i", "%n"] -> ["--out-format=%i %n"]
+    """
     out: list[str] = []
     i = 0
     while i < len(opts):
         o = opts[i]
         if o == "--out-format" and i + 1 < len(opts):
-            # handle ["--out-format", "%i %n"]
             out.append(f"--out-format={opts[i+1]}")
             i += 2
             continue
         if o.startswith("--out-format="):
-            # good as-is (but might be split later)
+            if i + 1 < len(opts) and opts[i + 1].startswith("%") and " " in opts[i + 1]:
+                # unlikely, but join if someone split the format string oddly
+                out.append(f"{o} {opts[i+1]}")
+                i += 2
+                continue
             out.append(o)
             i += 1
             continue
         if o.startswith("--out-format=%") and i + 1 < len(opts) and "%n" in opts[i + 1]:
-            # handle ["--out-format=%i", "%n"]
             out.append(f"{o} {opts[i+1]}")
             i += 2
             continue
@@ -219,10 +238,27 @@ def sanitize_rsync_options(opts: list[str]) -> list[str]:
     return out
 
 
+def _dedupe(seq: list[str]) -> list[str]:
+    seen = set()
+    out: list[str] = []
+    for s in seq:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+# -------------------------- rsync execution & parsing --------------------------
+
 ITEMIZED_RE = re.compile(r"^(?P<icode>[<>ch\.][^\s]*)\s+(?P<name>.+)$")
 
 
 def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
+    """
+    Run rsync and detect whether at least one file was actually transferred.
+
+    Returns (rc, copied_any, itemized_lines)
+    """
     proc = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
@@ -235,14 +271,15 @@ def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
         logging.debug("rsync stderr:\n%s", stderr.strip())
 
     copied_any = False
-    itemized = []
+    itemized: list[str] = []
     for ln in lines:
         m = ITEMIZED_RE.match(ln)
         if not m:
             continue
         itemized.append(ln)
         code = m.group("icode")
-        if code.startswith(("<f", ">f")):  # file written on sender or receiver
+        # '<f' = sender wrote/sent a regular file, '>f' = receiver wrote a regular file
+        if code.startswith(("<f", ">f")):
             copied_any = True
 
     if proc.returncode != 0:
@@ -257,6 +294,9 @@ def run_rsync_cmd(cmd: list[str]) -> tuple[int, bool, list[str]]:
             logging.debug("rsync itemized:\n%s", "\n".join(itemized))
 
     return proc.returncode, copied_any, itemized
+
+
+# -------------------------- Main transfer --------------------------
 
 
 def transfer_once(
@@ -322,13 +362,13 @@ def transfer_once(
         logging.info("No stable files to transfer.")
         return 0
 
-    rsync_opts = list(cfg.rsync_options)
+    # Build effective rsync options ONCE
+    rsync_opts = list(REQUIRED_RSYNC_OPTS)
     if dry_run and "--dry-run" not in rsync_opts and "-n" not in rsync_opts:
         rsync_opts.append("--dry-run")
     if add_rsync_options:
-        for opt in add_rsync_options:
-            if opt not in rsync_opts:
-                rsync_opts.append(opt)
+        rsync_opts.extend(add_rsync_options)
+    rsync_opts = sanitize_rsync_options(_dedupe(rsync_opts))
 
     failures = 0
     for src in sorted(stable_files):
@@ -339,8 +379,6 @@ def transfer_once(
             else remote_base_str
         )
 
-        rsync_opts = sanitize_rsync_options(list(cfg.rsync_options))
-
         cmd = build_rsync_cmd(
             src_file=src,
             remote_user=remote_user,
@@ -348,8 +386,6 @@ def transfer_once(
             remote_dir=remote_dir,
             rsync_options=rsync_opts,
         )
-
-        logging.debug(f"running this command: {cmd}")
 
         logging.debug("Executing: %s", " ".join(shlex.quote(c) for c in cmd))
         rc, copied, lines = run_rsync_cmd(cmd)
