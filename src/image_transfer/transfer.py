@@ -202,6 +202,8 @@ def build_rsync_cmd(
     remote_dir: str,
     rsync_options: Sequence[str],
 ) -> list[str]:
+    # Ensure remote_dir ends with / so rsync treats it as a directory
+    remote_dir = remote_dir.rstrip("/") + "/"
     remote_spec = f"{remote_user}@{remote_host}:{remote_dir}"
     return ["rsync", *rsync_options, str(src_file), remote_spec]
 
